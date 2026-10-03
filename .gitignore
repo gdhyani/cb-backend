@@ -1,0 +1,16 @@
+# Private: git/GitHub account rules (never commit)
+GITHUB.md
+
+# Dependencies & build
+node_modules/
+dist/
+.next/
+coverage/
+*.tsbuildinfo
+
+# Env & local state
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
