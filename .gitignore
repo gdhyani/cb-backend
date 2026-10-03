@@ -1,6 +1,9 @@
 # Private: git/GitHub account rules (never commit)
 GITHUB.md
 
+# Local-only docs: plans, specs, trial notes (never committed)
+docs/
+
 # Dependencies & build
 node_modules/
 dist/

@@ -16,6 +16,9 @@ bootstrap/events endpoints, and the `/tunnel` WebSocket gateway with every proto
 - **Keep `../product.md` current:** any change to structure, tooling, contracts, defaults or behaviour is
   written into the PRD and logged in PRD §20 with a version bump, in the same change.
 
+- **Docs stay local:** everything under `docs/` (plans, specs, trial notes) is gitignored and never
+  pushed. Do not commit plan or design documents anywhere else in the repo.
+
 ## Hard rules for this repo
 
 - **No endpoint ever returns stored secret plaintext** (L15, S2) — enforced by a test that
@@ -94,7 +97,7 @@ cb-backend/
 │  ├─ integration/            # API on ephemeral MongoDB; adapters vs docker-compose services
 │  ├─ mocks/upstreams/        # mock HTTPS upstreams on a test CA (stripe, openai SSE, apns h2 …)
 │  └─ security/               # canaries, "no secret in any response", log redaction
-├─ docs/plans/
+├─ docs/                    # LOCAL ONLY (gitignored): plans/, notes
 ├─ docker-compose.test.yml    # Postgres 16, MySQL 8, Mongo 7 RS, Redis 7 ACL, MinIO, Mailpit, backend Mongo
 ├─ README.md  CLAUDE.md
 ├─ biome.json  tsconfig.json  vitest.config.ts
