@@ -7,6 +7,7 @@ import { type Env, EnvError, loadEnv, setEnv } from "./config/env.js";
 import { GRANT_SWEEP_INTERVAL_MS, SHUTDOWN_TIMEOUT_MS } from "./constants.js";
 import { logger } from "./logger/logger.js";
 import { createServer } from "./server.js";
+import { closeAllAgentStreams } from "./services/agent-events.service.js";
 import { sweepExpiredGrants } from "./services/grant.service.js";
 
 export interface StartupOptions {
@@ -67,7 +68,7 @@ export async function startup(opts: StartupOptions = {}): Promise<RunningServer>
     }
   }
 
-  const server = createServer(createApp());
+  const { server, gateway } = createServer(createApp());
   await new Promise<void>((resolve) => server.listen(env.PORT, resolve));
   const { port } = server.address() as AddressInfo;
   logger.info(`ready on :${port} (env=${env.NODE_ENV})`);
@@ -84,6 +85,8 @@ export async function startup(opts: StartupOptions = {}): Promise<RunningServer>
     shuttingDown ??= (async () => {
       logger.info(`shutdown started (${reason})`);
       clearInterval(sweeper);
+      gateway.closeAll();
+      closeAllAgentStreams();
       const force = setTimeout(() => {
         logger.error(`shutdown: connections still open after ${SHUTDOWN_TIMEOUT_MS}ms, forcing close`);
         server.closeAllConnections();
