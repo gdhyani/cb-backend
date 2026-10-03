@@ -5,3 +5,4 @@ export const API_PREFIX = "/api";
 export const CORRELATION_HEADER = "x-correlation-id";
 export const SHUTDOWN_TIMEOUT_MS = 10_000;
 export const JSON_BODY_LIMIT = "1mb";
+export const GRANT_SWEEP_INTERVAL_MS = 2_000;

@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startup } from "../../src/lifecycle.js";
+import { testEnvVars } from "../helpers/env.js";
 import { startMemoryMongo } from "../helpers/mongo.js";
 
 let mongo: Awaited<ReturnType<typeof startMemoryMongo>>;
@@ -25,7 +26,7 @@ describe("lifecycle", () => {
 
   it("starts, serves health, then shuts down cleanly", async () => {
     const running = await startup({
-      env: { NODE_ENV: "test", PORT: "0", MONGODB_URI: mongo.uri },
+      env: testEnvVars(mongo.uri),
       exitOnShutdown: false,
       installSignalHandlers: false,
     });

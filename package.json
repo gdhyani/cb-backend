@@ -15,17 +15,26 @@
     "lint": "biome check ."
   },
   "dependencies": {
+    "@node-rs/argon2": "^2.2.1",
+    "@peculiar/x509": "^2.1.0",
+    "bson": "^7.3.3",
+    "cookie-parser": "^1.4.7",
     "express": "^5.2.1",
     "helmet": "^8.3.0",
     "mongoose": "^9.10.4",
+    "reflect-metadata": "^0.2.2",
+    "undici": "^8.11.2",
     "winston": "^3.19.0",
+    "ws": "^8.22.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
+    "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.4",
     "@types/supertest": "^7.2.1",
+    "@types/ws": "^8.18.2",
     "mongodb-memory-server": "^11.3.0",
     "nodemon": "^3.1.14",
     "supertest": "^7.3.1",
