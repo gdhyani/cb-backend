@@ -1,0 +1,6 @@
+{
+  "watch": ["src"],
+  "ext": "ts,json",
+  "exec": "node --env-file-if-exists=.env --import tsx src/index.ts",
+  "signal": "SIGTERM"
+}
