@@ -9,6 +9,7 @@ export const ERROR_CODES = {
     message: "You don't have access to this environment. Ask an admin to grant it in the dashboard (Access).",
   },
   ENVIRONMENT_KILLED: { statusCode: 403, message: "This environment is suspended by an administrator." },
+  KILLSWITCH_ACTIVE: { statusCode: 403, message: "Access is stopped by an emergency kill switch." },
   DEVICE_AUTH_PENDING: { statusCode: 400, message: "Waiting for approval in the dashboard." },
   NOT_FOUND: { statusCode: 404, message: "The requested resource was not found." },
   ROUTE_NOT_FOUND: { statusCode: 404, message: "This endpoint does not exist." },

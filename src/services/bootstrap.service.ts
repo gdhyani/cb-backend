@@ -73,7 +73,7 @@ export async function buildBootstrap(
 ): Promise<BootstrapDto> {
   const { project, env } = await resolveEnvironment(auth.userId, query);
   try {
-    await assertRuntimeAccess(auth.userId, env);
+    await assertRuntimeAccess(auth.userId, env, { deviceId: auth.deviceId });
   } catch (err) {
     await recordAudit({
       orgId: env.orgId,

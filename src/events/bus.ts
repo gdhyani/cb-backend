@@ -1,6 +1,13 @@
 import { EventEmitter } from "node:events";
 
-export type RevocationScope = "grant" | "device" | "membership" | "environment" | "project";
+export type RevocationScope =
+  | "grant"
+  | "device"
+  | "membership"
+  | "environment"
+  | "project"
+  | "org"
+  | "resource";
 
 export type BusEvent =
   | { type: "config.changed"; environmentId: string }
@@ -13,6 +20,7 @@ export type BusEvent =
       orgId?: string;
       userId?: string;
       deviceId?: string;
+      resourceId?: string;
     };
 
 /** In-process bus (FR-EVT-001); an interface so Redis or change streams can replace it later. */

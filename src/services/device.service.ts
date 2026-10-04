@@ -38,6 +38,27 @@ export interface DeviceDto {
   lastSeenAt: string | null;
   createdAt: string;
   revoked: boolean;
+  /** From the agent heartbeat; online = reported within the last 3 minutes. */
+  agent: { online: boolean; version: string | null; activeTunnels: number; seenAt: string | null };
+}
+
+export const AGENT_ONLINE_MS = 3 * 60_000;
+
+export const HeartbeatBody = z.object({
+  version: z.string().max(40),
+  activeTunnels: z.number().int().min(0).max(100_000),
+});
+
+/** FR-AGT: the agent reports in about once a minute. */
+export async function recordHeartbeat(
+  deviceId: string,
+  input: z.infer<typeof HeartbeatBody>,
+): Promise<{ ok: true }> {
+  await DeviceModel.updateOne(
+    { _id: deviceId, revokedAt: null },
+    { agentVersion: input.version, agentSeenAt: new Date(), activeTunnels: input.activeTunnels },
+  );
+  return { ok: true };
 }
 
 /** FR-AUTH-002 step 1: the CLI asks for a code. */
@@ -124,6 +145,9 @@ async function toDtos(
     lastSeenAt?: Date | null;
     createdAt?: Date;
     revokedAt?: Date | null;
+    agentVersion?: string | null;
+    agentSeenAt?: Date | null;
+    activeTunnels?: number | null;
   }[],
 ): Promise<DeviceDto[]> {
   const users = new Map(
@@ -141,6 +165,12 @@ async function toDtos(
       lastSeenAt: d.lastSeenAt?.toISOString() ?? null,
       createdAt: (d.createdAt ?? new Date()).toISOString(),
       revoked: Boolean(d.revokedAt),
+      agent: {
+        online: Boolean(d.agentSeenAt && Date.now() - d.agentSeenAt.getTime() < AGENT_ONLINE_MS),
+        version: d.agentVersion ?? null,
+        activeTunnels: d.activeTunnels ?? 0,
+        seenAt: d.agentSeenAt?.toISOString() ?? null,
+      },
     };
   });
 }

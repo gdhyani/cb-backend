@@ -32,6 +32,10 @@ export function eventConcerns(
       return event.environmentId === s.environmentId;
     case "project":
       return event.projectId === s.projectId;
+    case "org":
+      return event.orgId === s.orgId;
+    case "resource":
+      return Boolean(s.resource) && event.resourceId === s.resource?.id;
   }
 }
 
@@ -46,7 +50,7 @@ export async function revalidate(s: RuntimeSubject): Promise<string | undefined>
   const env = await EnvironmentModel.findById(s.environmentId as unknown as Types.ObjectId).lean();
   if (!env) return "environment deleted";
   try {
-    await assertRuntimeAccess(s.userId, env);
+    await assertRuntimeAccess(s.userId, env, { deviceId: s.deviceId, resourceId: s.resource?.id });
   } catch (err) {
     return err instanceof Error ? err.message : "access revoked";
   }

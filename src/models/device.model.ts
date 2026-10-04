@@ -9,6 +9,10 @@ const DeviceSchema = new Schema(
     expiresAt: { type: Date, required: true },
     lastSeenAt: { type: Date, default: null },
     revokedAt: { type: Date, default: null },
+    /** Agent heartbeat (POST /agent/heartbeat): version, last report and open tunnels. */
+    agentVersion: { type: String, default: null },
+    agentSeenAt: { type: Date, default: null },
+    activeTunnels: { type: Number, default: 0 },
   },
   { timestamps: true },
 );
