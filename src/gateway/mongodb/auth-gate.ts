@@ -13,6 +13,8 @@ import {
 import { type ScramMaterial, ScramServer } from "./scram-server.js";
 
 const HELLO = new Set(["hello", "ismaster", "isMaster"]);
+/** MongoDB's maxMessageSizeBytes; anything larger (or smaller than a header) is not a real message. */
+const MAX_MESSAGE = 48_000_000;
 const STRIP = ["speculativeAuthenticate", "saslSupportedMechs", "compression"] as const;
 const AUTH_FAILED = { ok: 0, errmsg: "Authentication failed.", code: 18, codeName: "AuthenticationFailed" };
 const NEEDS_AUTH = { ok: 0, errmsg: "command requires authentication", code: 13, codeName: "Unauthorized" };
@@ -50,14 +52,26 @@ export function runAuthGate(client: Duplex, upstream: Duplex, material: ScramMat
       client.end();
       reject(new Error("mongodb fake credential rejected"));
     };
+    /** Untrusted bytes from any local process: a malformed frame closes this client only, never the gateway. */
+    const abort = (why: string) => {
+      client.off("data", onData);
+      buffer = Buffer.alloc(0);
+      client.destroy();
+      reject(new Error(`mongodb client sent ${why}`));
+    };
 
     const handle = (raw: Buffer): boolean => {
       const requestId = raw.readInt32LE(4);
       const opCode = raw.readInt32LE(12);
       if (opCode === OP_QUERY) {
-        const { query } = decodeOpQuery(raw);
-        if (HELLO.has(commandName(query))) upstream.write(reencodeOpQuery(raw, strip(query)));
-        else client.end(); // legacy opcodes are only valid for the initial handshake
+        // Legacy opcodes are valid only for the initial handshake, and only as a command (`<db>.$cmd`):
+        // on older servers an OP_QUERY on a data namespace is a find on the real, authenticated connection.
+        const { collection, query } = decodeOpQuery(raw);
+        if (!collection.endsWith(".$cmd") || !HELLO.has(commandName(query))) {
+          abort("a legacy query that is not a handshake");
+          return false;
+        }
+        upstream.write(reencodeOpQuery(raw, strip(query)));
         return true;
       }
       if (opCode !== OP_MSG_CODE) {
@@ -95,10 +109,19 @@ export function runAuthGate(client: Duplex, upstream: Duplex, material: ScramMat
 
     const onData = (chunk: Buffer) => {
       buffer = Buffer.concat([buffer, chunk]);
-      while (buffer.length >= 16 && buffer.length >= buffer.readInt32LE(0)) {
-        const raw = buffer.subarray(0, buffer.readInt32LE(0));
-        buffer = buffer.subarray(raw.length);
-        if (!handle(raw)) return;
+      while (buffer.length >= 4) {
+        const length = buffer.readInt32LE(0);
+        if (length < 16 || length > MAX_MESSAGE) return abort(`a frame of invalid length ${length}`);
+        if (buffer.length < length) return;
+        const raw = buffer.subarray(0, length);
+        buffer = buffer.subarray(length);
+        let ok: boolean;
+        try {
+          ok = handle(raw);
+        } catch {
+          return abort("a malformed frame");
+        }
+        if (!ok) return;
         if (state === "done") {
           client.off("data", onData);
           if (buffer.length) out.write(buffer);

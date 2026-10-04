@@ -65,11 +65,23 @@ export function reencodeOpMsg(original: Buffer, body: Document): Buffer {
 }
 
 /** OP_QUERY (legacy hello only): flags, cstring collection, skip, return, query doc, optional selector. */
-export function decodeOpQuery(raw: Buffer): { query: Document; queryStart: number; queryEnd: number } {
+export function decodeOpQuery(raw: Buffer): {
+  collection: string;
+  query: Document;
+  queryStart: number;
+  queryEnd: number;
+} {
   const nameEnd = raw.indexOf(0, 20);
+  if (nameEnd < 0) throw new UpstreamError("OP_QUERY without a collection name");
+  const collection = raw.subarray(20, nameEnd).toString("utf8");
   const queryStart = nameEnd + 1 + 8;
   const queryEnd = queryStart + raw.readInt32LE(queryStart);
-  return { query: BSON.deserialize(raw.subarray(queryStart, queryEnd), LOSSLESS), queryStart, queryEnd };
+  return {
+    collection,
+    query: BSON.deserialize(raw.subarray(queryStart, queryEnd), LOSSLESS),
+    queryStart,
+    queryEnd,
+  };
 }
 
 export function reencodeOpQuery(original: Buffer, query: Document): Buffer {
