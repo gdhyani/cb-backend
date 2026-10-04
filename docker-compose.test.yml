@@ -1,4 +1,5 @@
 # Test/dev upstream services WITH credentials (the "real secrets" cb protects). Not the backend's own DB.
+# No passwords live in this file: export them in your shell before `docker compose up`.
 # MongoDB with auth runs natively (the mongo Docker image fails on Linux kernel >= 6.19, SERVER-121912):
 #   see cp-test-project/README.md → "start-services".
 name: cb-test-services
@@ -8,6 +9,40 @@ services:
     ports: ["6380:6379"]
     command: ["redis-server", "--requirepass", "${CB_TEST_REDIS_PASSWORD:?set CB_TEST_REDIS_PASSWORD in your shell}"]
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${CB_TEST_REDIS_PASSWORD:?set CB_TEST_REDIS_PASSWORD in your shell}", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDISCLI_AUTH\" ping"]
       interval: 3s
       retries: 20
+    environment:
+      REDISCLI_AUTH: ${CB_TEST_REDIS_PASSWORD:?set CB_TEST_REDIS_PASSWORD in your shell}
+  postgres-auth:
+    image: postgres:16
+    ports: ["5433:5432"]
+    environment:
+      POSTGRES_USER: shop_admin
+      POSTGRES_PASSWORD: ${CB_TEST_DB_PASSWORD:?set CB_TEST_DB_PASSWORD in your shell}
+      POSTGRES_DB: shop
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      POSTGRES_INITDB_ARGS: --auth=scram-sha-256
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shop_admin -d shop"]
+      interval: 3s
+      retries: 30
+  mysql-auth:
+    image: mysql:8.4
+    ports: ["3307:3306"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${CB_TEST_DB_PASSWORD:?set CB_TEST_DB_PASSWORD in your shell}
+      MYSQL_DATABASE: shop
+      MYSQL_USER: shop_admin
+      MYSQL_PASSWORD: ${CB_TEST_DB_PASSWORD:?set CB_TEST_DB_PASSWORD in your shell}
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -ushop_admin -p\"$$MYSQL_PASSWORD\" --silent"]
+      interval: 3s
+      retries: 40
+  mailpit:
+    image: axllent/mailpit:latest
+    ports: ["1026:1025", "8026:8025"]
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "false"
+      MP_SMTP_AUTH: "shop_mailer:${CB_TEST_DB_PASSWORD:?set CB_TEST_DB_PASSWORD in your shell}"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
