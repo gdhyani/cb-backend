@@ -5,7 +5,13 @@ import { decryptSecret, encryptSecret } from "../crypto/envelope.js";
 import { AppError } from "../errors/app-error.js";
 import { type ResourceKind, ResourceModel } from "../models/resource.model.js";
 import { VariableModel } from "../models/variable.model.js";
-import { parseMongoUri, parseRedisUri } from "../utils/connection-uri.js";
+import {
+  parseMongoUri,
+  parseMysqlUri,
+  parsePostgresUri,
+  parseRedisUri,
+  parseSmtpUri,
+} from "../utils/connection-uri.js";
 import { loadEnvironment, requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { touchEnvironment } from "./environment.service.js";
@@ -14,6 +20,9 @@ import { touchEnvironment } from "./environment.service.js";
 export const BROKERED_FIELDS: Record<ResourceKind, readonly string[]> = {
   mongodb: ["url"],
   redis: ["url"],
+  postgres: ["url"],
+  mysql: ["url"],
+  smtp: ["url", "host", "port", "user", "password"],
   http: ["key", "baseUrl"],
 };
 
@@ -23,6 +32,9 @@ const Name = z.string().trim().min(1).max(60);
 export const CreateResourceBody = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("mongodb"), name: Name, connectionUri: z.string().min(10) }),
   z.object({ kind: z.literal("redis"), name: Name, connectionUri: z.string().min(8) }),
+  z.object({ kind: z.literal("postgres"), name: Name, connectionUri: z.string().min(10) }),
+  z.object({ kind: z.literal("mysql"), name: Name, connectionUri: z.string().min(8) }),
+  z.object({ kind: z.literal("smtp"), name: Name, connectionUri: z.string().min(8) }),
   z.object({
     kind: z.literal("http"),
     name: Name,
@@ -96,15 +108,33 @@ function configAndSecret(
   input: Record<string, unknown>,
   current: Record<string, unknown> = {},
 ) {
-  if (kind === "mongodb" || kind === "redis") {
+  if (kind !== "http") {
     const uri = input.connectionUri as string | undefined;
     if (!uri) return { config: current, secret: undefined };
-    const parsed = kind === "mongodb" ? parseMongoUri(uri) : parseRedisUri(uri);
+    const parse = {
+      mongodb: parseMongoUri,
+      redis: parseRedisUri,
+      postgres: parsePostgresUri,
+      mysql: parseMysqlUri,
+      smtp: parseSmtpUri,
+    }[kind];
+    const parsed = parse(uri);
+    const defaultDb = {
+      mongodb: "test",
+      redis: "0",
+      postgres: parsed.username ?? "postgres",
+      mysql: "",
+      smtp: "",
+    }[kind];
+    const sslmode = parsed.params.get("sslmode") ?? "";
     // Host is shown to admins; credentials never are.
     const config = {
       host: `${parsed.host}:${parsed.port}`,
-      database: parsed.database || (kind === "mongodb" ? "test" : "0"),
-      tls: parsed.protocol === "rediss" || parsed.params.get("tls") === "true",
+      database: parsed.database || defaultDb,
+      tls:
+        ["rediss", "smtps"].includes(parsed.protocol) ||
+        parsed.params.get("tls") === "true" ||
+        ["require", "verify-ca", "verify-full"].includes(sslmode),
     };
     return { config, secret: uri };
   }

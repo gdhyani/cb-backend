@@ -48,3 +48,15 @@ export function parseMongoUri(uri: string, field = "connectionUri"): ParsedConne
 export function parseRedisUri(uri: string, field = "connectionUri"): ParsedConnection {
   return parse(uri, ["redis", "rediss"], 6379, field);
 }
+
+export function parsePostgresUri(uri: string, field = "connectionUri"): ParsedConnection {
+  return parse(uri, ["postgres", "postgresql"], 5432, field);
+}
+
+export function parseMysqlUri(uri: string, field = "connectionUri"): ParsedConnection {
+  return parse(uri, ["mysql"], 3306, field);
+}
+
+export function parseSmtpUri(uri: string, field = "connectionUri"): ParsedConnection {
+  return parse(uri, ["smtp", "smtps"], 587, field);
+}

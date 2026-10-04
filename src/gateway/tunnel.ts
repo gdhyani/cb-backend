@@ -18,7 +18,10 @@ import { readResourceSecret } from "../services/resource.service.js";
 import { eventConcerns, revalidate } from "../services/runtime-access.service.js";
 import { createHttpHandler, deniedHandler, serveHttp1, serveTls } from "./http/http-adapter.js";
 import { mongodbAdapter } from "./mongodb/mongodb-adapter.js";
+import { mysqlAdapter } from "./mysql/mysql-adapter.js";
+import { postgresAdapter } from "./postgres/postgres-adapter.js";
 import { redisAdapter } from "./redis/redis-adapter.js";
+import { smtpAdapter } from "./smtp/smtp-adapter.js";
 import { type AdapterHooks, type StreamAdapter, type TunnelContext, UpstreamError } from "./types.js";
 
 export const TUNNEL_PATH = "/tunnel";
@@ -72,6 +75,9 @@ const closeReason = (text: string) => text.slice(0, 120);
 const STREAM_ADAPTERS: Partial<Record<ResourceKind, StreamAdapter>> = {
   redis: redisAdapter,
   mongodb: mongodbAdapter,
+  postgres: postgresAdapter,
+  mysql: mysqlAdapter,
+  smtp: smtpAdapter,
 };
 
 async function handleTunnel(

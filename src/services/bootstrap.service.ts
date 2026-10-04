@@ -9,7 +9,7 @@ import { ResourceModel } from "../models/resource.model.js";
 import { VariableModel } from "../models/variable.model.js";
 import { assertRuntimeAccess, requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
-import { fakeApiKey, fakeRedisCredentials } from "./fakes.service.js";
+import { fakeApiKey, fakeDbCredentials, fakeRedisCredentials } from "./fakes.service.js";
 import { ensureOrgCa } from "./org-ca.service.js";
 import { generatedValue } from "./variable.service.js";
 
@@ -129,6 +129,25 @@ export async function buildBootstrap(
           const fake = fakeRedisCredentials(scope);
           const db = config.database && config.database !== "0" ? `/${String(config.database)}` : "";
           listenerFor(r).env[v.key] = `redis://${fake.username}:${fake.password}@127.0.0.1:{port}${db}`;
+        } else if (r.kind === "postgres" && v.field === "url") {
+          const fake = fakeDbCredentials(scope);
+          listenerFor(r).env[v.key] =
+            `postgresql://${fake.username}:${fake.password}@127.0.0.1:{port}/${String(config.database ?? "")}?sslmode=disable`;
+        } else if (r.kind === "mysql" && v.field === "url") {
+          const fake = fakeDbCredentials(scope);
+          listenerFor(r).env[v.key] =
+            `mysql://${fake.username}:${fake.password}@127.0.0.1:{port}/${String(config.database ?? "")}`;
+        } else if (r.kind === "smtp") {
+          const fake = fakeDbCredentials(scope);
+          const value = {
+            url: `smtp://${fake.username}:${fake.password}@127.0.0.1:{port}`,
+            host: "127.0.0.1",
+            port: "{port}",
+            user: fake.username,
+            password: fake.password,
+          }[v.field ?? "url"];
+          // Every SMTP field needs the listener; only host/port/url carry the port placeholder.
+          if (value !== undefined) listenerFor(r).env[v.key] = value;
         } else if (r.kind === "http" && v.field === "baseUrl") {
           listenerFor(r).env[v.key] = `http://127.0.0.1:{port}${config.basePath ?? ""}`;
         } else if (r.kind === "http" && v.field === "key") {

@@ -10,7 +10,8 @@ export interface FakeScope {
 }
 
 /** FR-CRY-002 / S7: fakes are bound to (device, environment, resource) and worthless anywhere else. */
-export function fakeRedisCredentials(scope: FakeScope): { username: string; password: string } {
+/** Fake user + password for database-style protocols (redis, postgres, mysql, smtp). */
+export function fakeDbCredentials(scope: FakeScope): { username: string; password: string } {
   const parts = ["fake", scope.deviceId, scope.environmentId, scope.resourceId];
   return {
     username: `cbu_${base32(secret(), [...parts, "user"], 8)}`,
@@ -21,3 +22,6 @@ export function fakeRedisCredentials(scope: FakeScope): { username: string; pass
 export function fakeApiKey(scope: FakeScope, prefix: string): string {
   return `${prefix}${alnum(secret(), ["fake", scope.deviceId, scope.environmentId, scope.resourceId, "key"], 40)}`;
 }
+
+/** @deprecated name kept for the redis adapter. */
+export const fakeRedisCredentials = fakeDbCredentials;
