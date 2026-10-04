@@ -1,0 +1,5 @@
+# Same line endings on every OS (the formatter and Windows CI expect LF).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
