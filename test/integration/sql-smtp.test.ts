@@ -281,4 +281,52 @@ describe.skipIf(!PASSWORD)("SQL, SMTP and AWS adapters through tunnels (§10.8)"
     listener.close();
     expect((await owner.delete(`/api/resources/${ids.pg}/profiles/readonly`)).status).toBe(200);
   });
+
+  it("FR-GW-007 revocation reaches postgres, mysql and smtp clients as a protocol-native error", async () => {
+    const { token, envId, ids, envOf, owner, bob } = await scenario();
+    const projectId = (await owner.get(`/api/environments/${envId}`)).body.data.projectId as string;
+    const pgL = await localListener(base, token, { layer: "1", env: envId, resource: ids.pg });
+    const myL = await localListener(base, token, { layer: "1", env: envId, resource: ids.mysql });
+    const smtpL = await localListener(base, token, { layer: "1", env: envId, resource: ids.smtp });
+
+    const pgClient = new pg.Client({
+      connectionString: fill(envOf("postgres").DATABASE_URL ?? "", pgL.port),
+    });
+    await pgClient.connect();
+    const pgError = new Promise<Error>((resolve) => pgClient.once("error", resolve));
+
+    const myConn = await mysql.createConnection(fill(envOf("mysql").MYSQL_URL ?? "", myL.port));
+    const myError = new Promise<Error>((resolve) => myConn.once("error", resolve));
+
+    // SMTP: open a raw session and read the 421 the gateway sends.
+    const smtpEnv = envOf("smtp");
+    const net = await import("node:net");
+    const smtp = net.connect(Number(fill(smtpEnv.SMTP_PORT ?? "", smtpL.port)), "127.0.0.1");
+    let smtpText = "";
+    smtp.on("data", (d) => {
+      smtpText += d.toString();
+    });
+    const step = async (line: string) => {
+      smtp.write(`${line}\r\n`);
+      await new Promise((r) => setTimeout(r, 300));
+    };
+    await new Promise((r) => setTimeout(r, 300));
+    await step("EHLO cb-test");
+    // Authenticated sessions are relayed to the real server; that is where revocation applies.
+    await step(
+      `AUTH PLAIN ${Buffer.from(`\0${smtpEnv.SMTP_USER}\0${smtpEnv.SMTP_PASS}`).toString("base64")}`,
+    );
+    expect(smtpText).toContain("235");
+
+    await owner.delete(`/api/projects/${projectId}/access/${bob.userId}`);
+
+    expect((await pgError).message).toMatch(/cb: access revoked by admin/);
+    expect((await myError).message).toMatch(/cb: access revoked by admin/);
+    await new Promise((r) => setTimeout(r, 500));
+    expect(smtpText).toContain("421 4.7.0 cb: access revoked by admin");
+    smtp.destroy();
+    await pgClient.end().catch(() => undefined);
+    myConn.destroy();
+    for (const l of [pgL, myL, smtpL]) l.close();
+  });
 });

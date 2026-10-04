@@ -6,6 +6,7 @@ import { safeEqual } from "../../crypto/safe-equal.js";
 import { fakeDbCredentials } from "../../services/fakes.service.js";
 import { parsePostgresUri } from "../../utils/connection-uri.js";
 import { upstreamCa } from "../http/upstream.js";
+import { postgresFramer, REVOKED_TEXT, relayWithRevocation } from "../revoke-relay.js";
 import { ScramSha256Client } from "../sasl/scram-sha256.js";
 import { connected, readExact } from "../stream-io.js";
 import { type StreamAdapter, UpstreamError } from "../types.js";
@@ -96,7 +97,7 @@ async function authenticateUpstream(upstream: Duplex, user: string, password: st
  * §10.8 postgres: act as a Postgres server towards the app (no TLS, cleartext password = the device's
  * fake), then authenticate upstream with the real credentials and pipe the session.
  */
-export const postgresAdapter: StreamAdapter = async (client: Duplex, ctx) => {
+export const postgresAdapter: StreamAdapter = async (client: Duplex, ctx, hooks) => {
   const real = parsePostgresUri(ctx.secret);
   const sslmode = real.params.get("sslmode");
 
@@ -144,6 +145,6 @@ export const postgresAdapter: StreamAdapter = async (client: Duplex, ctx) => {
     throw err;
   }
   client.write(authRequest(AUTH_OK));
-  client.pipe(upstream);
-  upstream.pipe(client);
+  // FR-GW-007: on revocation the app gets a FATAL ErrorResponse at a message boundary.
+  relayWithRevocation(client, upstream, postgresFramer(), hooks, () => errorResponse("57P01", REVOKED_TEXT));
 };

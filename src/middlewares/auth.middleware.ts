@@ -107,6 +107,23 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   next();
 }
 
+/**
+ * For routes that work signed out but also use a session when present (accept-invite): a cookie-authenticated
+ * mutation still needs the CSRF header (FR-AUTH-001, M0-D4).
+ */
+export function csrfIfSession(req: Request, res: Response, next: NextFunction): void {
+  const auth = res.locals.auth;
+  if (auth?.kind === "web" && !SAFE_METHODS.has(req.method) && req.header(CSRF_HEADER) !== "1") {
+    next(
+      new AppError("CSRF_REQUIRED", {
+        context: `auth: ${req.method} ${req.originalUrl} without ${CSRF_HEADER}`,
+      }),
+    );
+    return;
+  }
+  next();
+}
+
 /** Narrow helper for controllers that sit behind requireAuth. */
 export function authOf(res: Response): AuthContext {
   const auth = res.locals.auth;

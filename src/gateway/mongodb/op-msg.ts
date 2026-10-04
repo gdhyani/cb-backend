@@ -6,12 +6,13 @@ import { UpstreamError } from "../types.js";
 const OP_MSG = 2013;
 let nextRequestId = 1;
 
-export function encodeOpMsg(doc: Document): Buffer {
+/** `responseTo` set: a reply to that request (used for revocation errors). */
+export function encodeOpMsg(doc: Document, responseTo = 0): Buffer {
   const body = BSON.serialize(doc);
   const header = Buffer.alloc(21);
   header.writeInt32LE(21 + body.length, 0);
   header.writeInt32LE(nextRequestId++, 4);
-  header.writeInt32LE(0, 8);
+  header.writeInt32LE(responseTo, 8);
   header.writeInt32LE(OP_MSG, 12);
   header.writeUInt32LE(0, 16);
   header.writeUInt8(0, 20);

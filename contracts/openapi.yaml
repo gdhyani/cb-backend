@@ -224,12 +224,19 @@ paths:
       tags:
         - Auth
       summary: Accept an invite (FR-AUTH-005)
-      description: With a session cookie the current user joins the organization. Without one, name, email and password create the account and a session cookie is set.
+      description: With a session cookie the current user joins the organization (the `x-cb-csrf` header is then required). Without one, name, email and password create the account and a session cookie is set.
       security:
         - {}
         - sessionCookie: []
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
+        - name: x-cb-csrf
+          in: header
+          required: false
+          description: Required (`1`) when a session cookie is sent; otherwise 403 CSRF_REQUIRED.
+          schema:
+            type: string
+            const: "1"
       requestBody:
         required: true
         content:
@@ -323,7 +330,7 @@ paths:
         | event | data | meaning |
         |---|---|---|
         | `ready` | `{"environmentId":"…"}` | Sent once when the stream opens. |
-        | `config.changed` | `{"environmentId":"…"}` | The snapshot changed; re-fetch `/api/agent/bootstrap`. |
+        | `config.changed` | `{"environmentId":"…","version":3}` | The snapshot changed; re-fetch `/api/agent/bootstrap`. |
         | `access.revoked` | `{"scope":"grant\|device\|membership\|environment\|project","reason":"…"}` | Access is gone (re-checked against the database before sending). |
         | `heartbeat` | `{}` | Every 15 s. |
       security:

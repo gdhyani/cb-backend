@@ -1,6 +1,7 @@
 import type { Response } from "express";
 import { type BusEvent, bus } from "../events/bus.js";
 import { logger } from "../logger/logger.js";
+import { EnvironmentModel } from "../models/environment.model.js";
 import { eventConcerns, type RuntimeSubject, revalidate } from "./runtime-access.service.js";
 
 const HEARTBEAT_MS = 15_000;
@@ -8,6 +9,12 @@ const open = new Set<Response>();
 
 function write(res: Response, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+/** §12.3: config.changed carries the environment's current version so agents can skip stale refreshes. */
+async function writeConfigChanged(res: Response, environmentId: string): Promise<void> {
+  const env = await EnvironmentModel.findById(environmentId).select("version").lean();
+  write(res, "config.changed", { environmentId, version: env?.version ?? 1 });
 }
 
 /** FR-EVT-002: streams config.changed / access.revoked for one device + environment. */
@@ -23,15 +30,14 @@ export function streamAgentEvents(res: Response, subject: RuntimeSubject): void 
 
   const onEvent = (event: BusEvent) => {
     if (event.type === "config.changed") {
-      if (event.environmentId === subject.environmentId)
-        write(res, "config.changed", { environmentId: event.environmentId });
+      if (event.environmentId === subject.environmentId) void writeConfigChanged(res, event.environmentId);
       return;
     }
     if (!eventConcerns(event, subject)) return;
     void revalidate(subject).then(
       (reason) => {
         if (reason) write(res, "access.revoked", { scope: event.scope, reason: event.reason });
-        else write(res, "config.changed", { environmentId: subject.environmentId });
+        else void writeConfigChanged(res, subject.environmentId);
       },
       (err: unknown) =>
         logger.error(

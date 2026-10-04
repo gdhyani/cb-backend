@@ -427,6 +427,28 @@ describe("revocation (J7, FR-GW-007, S4)", () => {
     await client.close(true);
     listener.close();
   });
+
+  it("FR-GW-007 an in-flight mongodb operation fails with a protocol-native 'access revoked' error", async () => {
+    const { token, envId, resources, boot, owner, deviceId } = await scenario();
+    const listener = await localListener(base, token, { layer: "1", env: envId, resource: resources.db });
+    const client = new MongoClient(
+      fill(
+        boot.body.data.listeners.find((l: { kind: string }) => l.kind === "mongodb").env.MONGODB_URI,
+        listener.port,
+      ),
+      { serverSelectionTimeoutMS: 2000, maxPoolSize: 1, retryReads: false },
+    );
+    await client.connect();
+    const orders = client.db("shop").collection("cb_slow");
+    await orders.insertOne({ n: 1 });
+    // Server-side sleep keeps the request in flight while access is revoked.
+    const slow = orders.find({ $where: "sleep(2000) || true" }).toArray();
+    await new Promise((r) => setTimeout(r, 300));
+    await owner.delete(`/api/devices/${deviceId}`);
+    await expect(slow).rejects.toThrow(/cb: access revoked by admin/);
+    await client.close(true);
+    listener.close();
+  });
 });
 
 describe("agent events (FR-EVT-002)", () => {
@@ -438,12 +460,15 @@ describe("agent events (FR-EVT-002)", () => {
     expect(res.headers.get("content-type")).toContain("text/event-stream");
     const reader = res.body?.getReader();
     const events: string[] = [];
+    let raw = "";
     const pump = (async () => {
       const dec = new TextDecoder();
       for (;;) {
         const { value, done } = (await reader?.read()) ?? { done: true };
         if (done) return;
-        for (const m of dec.decode(value).matchAll(/event: ([\w.]+)/g)) events.push(m[1] ?? "");
+        const text = dec.decode(value);
+        raw += text;
+        for (const m of text.matchAll(/event: ([\w.]+)/g)) events.push(m[1] ?? "");
         if (events.includes("access.revoked")) return;
       }
     })();
@@ -453,5 +478,7 @@ describe("agent events (FR-EVT-002)", () => {
     await Promise.race([pump, new Promise((r) => setTimeout(r, 3000))]);
     await reader?.cancel();
     expect(events).toEqual(expect.arrayContaining(["ready", "config.changed", "access.revoked"]));
+    // §12.3: config.changed carries the environment version.
+    expect(raw).toMatch(/event: config\.changed\ndata: \{"environmentId":"[a-f0-9]{24}","version":\d+\}/);
   });
 });

@@ -97,6 +97,17 @@ describe("organizations, invites and roles (J4, FR-UI-004)", () => {
     expect(forbidden.body.error.code).toBe("FORBIDDEN");
   });
 
+  it("FR-AUTH-001 accepting an invite with a session cookie requires the CSRF header", async () => {
+    const { owner, orgId } = await signupOwner(app);
+    const invite = await owner.post(`/api/orgs/${orgId}/invites`, { role: "developer" });
+    const other = await signupOwner(app, "2");
+    const body = { token: invite.body.data.token };
+    const withoutHeader = await other.owner.raw.post("/api/auth/accept-invite").send(body);
+    expect(withoutHeader.status).toBe(403);
+    expect(withoutHeader.body.error.code).toBe("CSRF_REQUIRED");
+    expect((await other.owner.post("/api/auth/accept-invite", body)).status).toBe(200);
+  });
+
   it("invite links are single-use and preview without auth", async () => {
     const { owner, orgId } = await signupOwner(app);
     const invite = await owner.post(`/api/orgs/${orgId}/invites`, { role: "admin" });
