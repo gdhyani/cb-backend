@@ -25,6 +25,7 @@ export const BROKERED_FIELDS: Record<ResourceKind, readonly string[]> = {
   smtp: ["url", "host", "port", "user", "password"],
   http: ["key", "baseUrl"],
   oauth: ["clientSecret"],
+  aws: ["accessKeyId", "secretAccessKey", "endpoint", "region"],
 };
 
 const HostPort = z.string().regex(/^[a-z0-9.-]+:\d{1,5}$/i, "use host:port, e.g. api.stripe.com:443");
@@ -50,6 +51,20 @@ export const CreateResourceBody = z.discriminatedUnion("kind", [
     redirectHosts: z.array(HostPort).max(10).default([]),
   }),
   z.object({
+    kind: z.literal("aws"),
+    name: Name,
+    region: z.string().regex(/^[a-z0-9-]+$/, "e.g. eu-west-1, or auto for R2"),
+    // https for real endpoints; plain http is accepted only for loopback test services.
+    endpoint: z
+      .url()
+      .refine(
+        (u) => u.startsWith("https://") || /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?/.test(u),
+        "must be https:// (http only for localhost)",
+      ),
+    accessKeyId: z.string().min(3),
+    secretAccessKey: z.string().min(8),
+  }),
+  z.object({
     kind: z.literal("oauth"),
     name: Name,
     tokenUrl: z.url().refine((u) => u.startsWith("https://"), "must be an https:// URL"),
@@ -60,6 +75,15 @@ export const CreateResourceBody = z.discriminatedUnion("kind", [
 ]);
 
 export const UpdateResourceBody = z.object({
+  accessKeyId: z.string().min(3).optional(),
+  secretAccessKey: z.string().min(8).optional(),
+  region: z
+    .string()
+    .regex(/^[a-z0-9-]+$/)
+    .optional(),
+  endpoint: z.url().optional(),
+  clientSecret: z.string().min(1).optional(),
+  tokenUrl: z.url().optional(),
   name: Name.optional(),
   connectionUri: z.string().min(8).optional(),
   apiKey: z.string().min(1).optional(),
@@ -117,6 +141,18 @@ function configAndSecret(
   input: Record<string, unknown>,
   current: Record<string, unknown> = {},
 ) {
+  if (kind === "aws") {
+    const config = {
+      ...current,
+      ...(input.region ? { region: input.region } : {}),
+      ...(input.endpoint ? { endpoint: input.endpoint } : {}),
+    };
+    const secret =
+      input.accessKeyId && input.secretAccessKey
+        ? JSON.stringify({ accessKeyId: input.accessKeyId, secretAccessKey: input.secretAccessKey })
+        : undefined;
+    return { config, secret };
+  }
   if (kind === "oauth") {
     const tokenUrl = (input.tokenUrl as string | undefined) ?? (current.tokenUrl as string | undefined) ?? "";
     const hosts =

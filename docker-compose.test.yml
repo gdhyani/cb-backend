@@ -46,3 +46,11 @@ services:
       MP_SMTP_AUTH_ACCEPT_ANY: "false"
       MP_SMTP_AUTH: "shop_mailer:${CB_TEST_DB_PASSWORD:?set CB_TEST_DB_PASSWORD in your shell}"
       MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+  s3:
+    image: rustfs/rustfs:latest
+    ports: ["9010:9000"]
+    environment:
+      RUSTFS_ACCESS_KEY: shopadmin
+      RUSTFS_SECRET_KEY: ${CB_TEST_DB_PASSWORD:?set CB_TEST_DB_PASSWORD in your shell}
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000

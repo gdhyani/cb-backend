@@ -9,7 +9,7 @@ import { ResourceModel } from "../models/resource.model.js";
 import { VariableModel } from "../models/variable.model.js";
 import { assertRuntimeAccess, requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
-import { fakeApiKey, fakeDbCredentials, fakeRedisCredentials } from "./fakes.service.js";
+import { fakeApiKey, fakeAwsKeys, fakeDbCredentials, fakeRedisCredentials } from "./fakes.service.js";
 import { ensureOrgCa } from "./org-ca.service.js";
 import { generatedValue } from "./variable.service.js";
 
@@ -150,6 +150,12 @@ export async function buildBootstrap(
           if (value !== undefined) listenerFor(r).env[v.key] = value;
         } else if (r.kind === "http" && v.field === "baseUrl") {
           listenerFor(r).env[v.key] = `http://127.0.0.1:{port}${config.basePath ?? ""}`;
+        } else if (r.kind === "aws") {
+          const fake = fakeAwsKeys(scope);
+          if (v.field === "endpoint") listenerFor(r).env[v.key] = "http://127.0.0.1:{port}";
+          else if (v.field === "region") plain[v.key] = String(config.region ?? "us-east-1");
+          else if (v.field === "accessKeyId") plain[v.key] = fake.accessKeyId;
+          else if (v.field === "secretAccessKey") plain[v.key] = fake.secretAccessKey;
         } else if (r.kind === "oauth" && v.field === "clientSecret") {
           plain[v.key] = fakeApiKey(scope, "cb-");
           for (const hp of config.redirectHosts ?? []) {

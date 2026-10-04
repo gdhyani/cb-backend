@@ -25,3 +25,12 @@ export function fakeApiKey(scope: FakeScope, prefix: string): string {
 
 /** @deprecated name kept for the redis adapter. */
 export const fakeRedisCredentials = fakeDbCredentials;
+
+/** AWS-shaped fakes: access key "AKIACB" + 14 base32 (upper), 40-char secret. */
+export function fakeAwsKeys(scope: FakeScope): { accessKeyId: string; secretAccessKey: string } {
+  const parts = ["fake", scope.deviceId, scope.environmentId, scope.resourceId];
+  return {
+    accessKeyId: `AKIACB${base32(secret(), [...parts, "akid"], 14).toUpperCase()}`,
+    secretAccessKey: alnum(secret(), [...parts, "aws-secret"], 40),
+  };
+}

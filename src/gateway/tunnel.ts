@@ -16,6 +16,7 @@ import { recordAudit } from "../services/audit.service.js";
 import { loadOrgCa } from "../services/org-ca.service.js";
 import { readResourceSecret } from "../services/resource.service.js";
 import { eventConcerns, revalidate } from "../services/runtime-access.service.js";
+import { createAwsHandler } from "./http/aws-adapter.js";
 import { createHttpHandler, deniedHandler, serveHttp1, serveTls } from "./http/http-adapter.js";
 import { createOAuthHandler } from "./http/oauth-adapter.js";
 import { mongodbAdapter } from "./mongodb/mongodb-adapter.js";
@@ -132,7 +133,7 @@ async function handleTunnel(
   } catch (err) {
     const code = err instanceof AppError ? err.code : "INTERNAL_ERROR";
     void recordAudit({ ...audit, action: "tunnel.denied", outcome: "denied", meta: { reason: code } });
-    if (resource.kind === "http" || resource.kind === "oauth") {
+    if (resource.kind === "http" || resource.kind === "oauth" || resource.kind === "aws") {
       // HTTP clients get a readable 403 instead of a dropped connection (J7).
       if (params.layer === "1") serveHttp1(stream, deniedHandler);
       else serveTls(stream, await leavesFor(env.orgId), deniedHandler);
@@ -198,8 +199,13 @@ async function handleTunnel(
   });
 
   try {
-    if (resource.kind === "http" || resource.kind === "oauth") {
-      const handler = resource.kind === "oauth" ? createOAuthHandler(ctx) : createHttpHandler(ctx);
+    if (resource.kind === "http" || resource.kind === "oauth" || resource.kind === "aws") {
+      const handler =
+        resource.kind === "oauth"
+          ? createOAuthHandler(ctx)
+          : resource.kind === "aws"
+            ? createAwsHandler(ctx)
+            : createHttpHandler(ctx);
       if (ctx.layer === 1) serveHttp1(stream, handler);
       else serveTls(stream, await leavesFor(env.orgId), handler);
       return;

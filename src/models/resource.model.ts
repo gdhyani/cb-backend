@@ -1,7 +1,16 @@
 import { type InferSchemaType, model, Schema } from "mongoose";
 import { EncryptedSecretSchema } from "./encrypted-secret.schema.js";
 
-export const RESOURCE_KINDS = ["mongodb", "redis", "postgres", "mysql", "smtp", "http", "oauth"] as const;
+export const RESOURCE_KINDS = [
+  "mongodb",
+  "redis",
+  "postgres",
+  "mysql",
+  "smtp",
+  "http",
+  "oauth",
+  "aws",
+] as const;
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 
 const ResourceSchema = new Schema(

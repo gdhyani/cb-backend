@@ -17,6 +17,9 @@
   "dependencies": {
     "@node-rs/argon2": "^2.2.1",
     "@peculiar/x509": "^2.1.0",
+    "@smithy/hash-node": "^4.5.2",
+    "@smithy/protocol-http": "^5.6.2",
+    "@smithy/signature-v4": "^5.7.4",
     "bson": "^7.3.3",
     "cookie-parser": "^1.4.7",
     "express": "^5.2.1",
@@ -29,6 +32,8 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1146.0",
+    "@aws-sdk/s3-request-presigner": "^3.1146.0",
     "@biomejs/biome": "^2.5.15",
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",

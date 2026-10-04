@@ -1,5 +1,7 @@
 import type http from "node:http";
 import type { AddressInfo } from "node:net";
+import { CreateBucketCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import mongoose from "mongoose";
 import mysql from "mysql2/promise";
 import nodemailer from "nodemailer";
@@ -20,12 +22,14 @@ const enc = encodeURIComponent(PASSWORD ?? "");
 const PG_URI = `postgresql://shop_admin:${enc}@127.0.0.1:5433/shop`;
 const MYSQL_URI = `mysql://shop_admin:${enc}@127.0.0.1:3307/shop`;
 const SMTP_URI = `smtp://shop_mailer:${enc}@127.0.0.1:1026`;
+const S3_ENDPOINT = "http://127.0.0.1:9010";
+const S3_ACCESS_KEY = "shopadmin";
 
 let backendDb: Awaited<ReturnType<typeof startMemoryMongo>>;
 let server: http.Server;
 let base: string;
 
-describe.skipIf(!PASSWORD)("SQL and SMTP adapters through tunnels (§10.8)", () => {
+describe.skipIf(!PASSWORD)("SQL, SMTP and AWS adapters through tunnels (§10.8)", () => {
   beforeAll(async () => {
     backendDb = await startMemoryMongo();
     setEnv(loadEnv(testEnvVars(backendDb.uri)));
@@ -71,6 +75,28 @@ describe.skipIf(!PASSWORD)("SQL and SMTP adapters through tunnels (§10.8)", () 
         ["SMTP_PASS", "password"],
       ]),
     };
+    const s3 = await owner.post(`/api/environments/${envId}/resources`, {
+      kind: "aws",
+      name: "uploads",
+      region: "us-east-1",
+      endpoint: S3_ENDPOINT,
+      accessKeyId: S3_ACCESS_KEY,
+      secretAccessKey: PASSWORD,
+    });
+    if (s3.status !== 201) throw new Error(JSON.stringify(s3.body));
+    const awsIds = { s3: s3.body.data.id as string };
+    for (const [key, field] of [
+      ["AWS_ACCESS_KEY_ID", "accessKeyId"],
+      ["AWS_SECRET_ACCESS_KEY", "secretAccessKey"],
+      ["AWS_ENDPOINT_URL", "endpoint"],
+      ["AWS_REGION", "region"],
+    ])
+      await owner.post(`/api/environments/${envId}/variables`, {
+        type: "brokered",
+        key,
+        resourceId: awsIds.s3,
+        field,
+      });
     const bob = await addMember(app, owner, orgId, "Bob");
     await owner.post(`/api/environments/${envId}/grants`, { userId: bob.userId });
     const { token } = await loginDevice(app, bob.member);
@@ -79,7 +105,7 @@ describe.skipIf(!PASSWORD)("SQL and SMTP adapters through tunnels (§10.8)", () 
     );
     const envOf = (kind: string) =>
       boot.body.data.listeners.find((l: { kind: string }) => l.kind === kind).env as Record<string, string>;
-    return { token, envId, ids, boot, envOf };
+    return { token, envId, ids: { ...ids, ...awsIds }, boot, envOf };
   }
 
   const fill = (template: string, port: number) => template.replaceAll("{port}", String(port));
@@ -163,6 +189,33 @@ describe.skipIf(!PASSWORD)("SQL and SMTP adapters through tunnels (§10.8)", () 
     await expect(bad.sendMail({ from: "a@b.c", to: "d@e.f", text: "x" })).rejects.toThrow(
       /Invalid login|535/,
     );
+    listener.close();
+  });
+
+  it("S3 SDK put/get and presigned GET work with fake keys re-signed at the gateway", async () => {
+    const { token, envId, ids, boot, envOf } = await scenario();
+    const plain = boot.body.data.plain as Record<string, string>;
+    expect(plain.AWS_ACCESS_KEY_ID).toMatch(/^AKIACB[A-Z2-7]{14}$/);
+    expect(JSON.stringify(boot.body)).not.toContain(S3_ACCESS_KEY);
+    const listener = await localListener(base, token, { layer: "1", env: envId, resource: ids.s3 });
+    const client = (accessKeyId: string, secretAccessKey: string) =>
+      new S3Client({
+        region: plain.AWS_REGION,
+        endpoint: fill(envOf("aws").AWS_ENDPOINT_URL ?? "", listener.port),
+        forcePathStyle: true,
+        credentials: { accessKeyId, secretAccessKey },
+      });
+    const s3 = client(plain.AWS_ACCESS_KEY_ID ?? "", plain.AWS_SECRET_ACCESS_KEY ?? "");
+    const Bucket = `cb-it-${Date.now()}`;
+    await s3.send(new CreateBucketCommand({ Bucket }));
+    await s3.send(new PutObjectCommand({ Bucket, Key: "a.txt", Body: "through cb" }));
+    const got = await s3.send(new GetObjectCommand({ Bucket, Key: "a.txt" }));
+    expect(await got.Body?.transformToString()).toBe("through cb");
+    const url = await getSignedUrl(s3, new GetObjectCommand({ Bucket, Key: "a.txt" }), { expiresIn: 60 });
+    expect(url).not.toContain(S3_ACCESS_KEY);
+    expect(await (await fetch(url)).text()).toBe("through cb");
+    const forged = client("AKIACBAAAAAAAAAAAAAA", plain.AWS_SECRET_ACCESS_KEY ?? "");
+    await expect(forged.send(new GetObjectCommand({ Bucket, Key: "a.txt" }))).rejects.toThrow();
     listener.close();
   });
 });
