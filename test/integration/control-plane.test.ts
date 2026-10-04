@@ -672,3 +672,32 @@ describe("CLI tokens (FR-AUTH-002/003/004)", () => {
     expect((await cli(app, tampered).get("/api/cli/whoami")).status).toBe(401);
   });
 });
+
+describe("D11 private-only plain http upstreams (FR-GW-004)", () => {
+  async function env() {
+    const ctx = await signupOwner(app);
+    const project = await ctx.owner.post(`/api/orgs/${ctx.orgId}/projects`, { name: "LLM" });
+    return { ...ctx, envId: project.body.data.environments[0].id as string };
+  }
+  const http = (upstreamUrl: string) => ({ kind: "http", name: "llm", upstreamUrl, apiKey: "k" });
+
+  it("accepts http:// for a private IP and refuses it for a public host, on create and on PATCH", async () => {
+    const { owner, envId } = await env();
+    const ok = await owner.post(`/api/environments/${envId}/resources`, http("http://10.0.4.12:8000"));
+    expect(ok.status).toBe(201);
+    const bad = await owner.post(`/api/environments/${envId}/resources`, {
+      ...http("http://api.example.com"),
+      name: "x",
+    });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error.details[0].path).toBe("upstreamUrl");
+    const patch = await owner.patch(`/api/resources/${ok.body.data.id}`, {
+      upstreamUrl: "http://api.example.com",
+    });
+    expect(patch.status).toBe(400);
+    const tokenUrl = await owner.patch(`/api/resources/${ok.body.data.id}`, {
+      tokenUrl: "http://10.0.0.1/token",
+    });
+    expect(tokenUrl.status).toBe(400);
+  });
+});

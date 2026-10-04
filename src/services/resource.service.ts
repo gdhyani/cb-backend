@@ -16,6 +16,7 @@ import {
   parseRedisUri,
   parseSmtpUri,
 } from "../utils/connection-uri.js";
+import { HttpsOnlyUrl, UpstreamUrl } from "../utils/upstream-url.js";
 import { loadEnvironment, requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { touchEnvironment } from "./environment.service.js";
@@ -36,7 +37,7 @@ export const BROKERED_FIELDS: Record<ResourceKind, readonly string[]> = {
 
 const GOOGLE_DEFAULT_HOSTS = ["oauth2.googleapis.com:443", "fcm.googleapis.com:443"];
 const APNS_DEFAULT_HOSTS = ["api.push.apple.com:443", "api.sandbox.push.apple.com:443"];
-const HttpsUrl = z.url().refine((u) => u.startsWith("https://"), "must be an https:// URL");
+const HttpsUrl = HttpsOnlyUrl;
 const PemPrivateKey = z.string().refine((k) => k.includes("PRIVATE KEY-----"), "must be a PEM private key");
 
 /** Public CA certificate(s) a self-hosted or private-CA database presents; trusted for that resource only. */
@@ -105,7 +106,7 @@ export const CreateResourceBody = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("http"),
     name: Name,
-    upstreamUrl: z.url().refine((u) => u.startsWith("https://"), "must be an https:// URL"),
+    upstreamUrl: UpstreamUrl,
     authScheme: z.enum(["bearer", "x-api-key", "basic-password"]).default("bearer"),
     apiKey: z.string().min(1),
     fakePrefix: z.string().max(20).default("cb_"),
@@ -119,13 +120,8 @@ export const CreateResourceBody = z.discriminatedUnion("kind", [
     kind: z.literal("aws"),
     name: Name,
     region: z.string().regex(/^[a-z0-9-]+$/, "e.g. eu-west-1, or auto for R2"),
-    // https for real endpoints; plain http is accepted only for loopback test services.
-    endpoint: z
-      .url()
-      .refine(
-        (u) => u.startsWith("https://") || /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?/.test(u),
-        "must be https:// (http only for localhost)",
-      ),
+    // https for real endpoints; plain http only for private addresses (D11).
+    endpoint: UpstreamUrl,
     accessKeyId: z.string().min(3),
     secretAccessKey: z.string().min(8),
   }),
@@ -148,9 +144,9 @@ export const CreateResourceBody = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("oauth"),
     name: Name,
-    tokenUrl: z.url().refine((u) => u.startsWith("https://"), "must be an https:// URL"),
+    tokenUrl: HttpsOnlyUrl,
     clientSecret: z.string().min(1),
-    upstreamUrl: z.url().optional(),
+    upstreamUrl: UpstreamUrl.optional(),
     redirectHosts: z.array(HostPort).max(10).optional(),
   }),
 ]);
@@ -172,15 +168,15 @@ export const UpdateResourceBody = z.object({
     .string()
     .regex(/^[a-z0-9-]+$/)
     .optional(),
-  endpoint: z.url().optional(),
+  endpoint: UpstreamUrl.optional(),
   clientSecret: z.string().min(1).optional(),
-  tokenUrl: z.url().optional(),
+  tokenUrl: HttpsOnlyUrl.optional(),
   name: Name.optional(),
   connectionUri: z.string().min(8).optional(),
   /** "" removes a previously stored CA certificate. */
   caCert: PemCertificates.or(z.literal("")).optional(),
   apiKey: z.string().min(1).optional(),
-  upstreamUrl: z.url().optional(),
+  upstreamUrl: UpstreamUrl.optional(),
   authScheme: z.enum(["bearer", "x-api-key", "basic-password"]).optional(),
   fakePrefix: z.string().max(20).optional(),
   basePath: z.string().optional(),
