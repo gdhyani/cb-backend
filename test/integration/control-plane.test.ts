@@ -342,12 +342,13 @@ describe("CLI device login (FR-AUTH-002, J5)", () => {
     const token = await request(app)
       .post("/api/cli/device/token")
       .send({ deviceCode: start.body.data.deviceCode });
-    expect(token.body.data.token).toMatch(/^cbd_/);
+    expect(token.body.data.accessToken.split(".")).toHaveLength(3);
+    expect(token.body.data.refreshToken).toMatch(/^cbr_/);
     const reuse = await request(app)
       .post("/api/cli/device/token")
       .send({ deviceCode: start.body.data.deviceCode });
     expect(reuse.status).toBe(404);
-    const client = cli(app, token.body.data.token);
+    const client = cli(app, token.body.data.accessToken);
     expect((await client.get("/api/cli/whoami")).body.data.user.email).toBe("ada@example.com");
     expect((await client.get(`/api/orgs/${orgId}/projects`)).status).toBe(200);
   });
@@ -597,5 +598,77 @@ describe("kill switches, sessions and heartbeat (J7, FR-UI-002)", () => {
     );
     expect(after.agent).toMatchObject({ online: true, version: "0.1.0", activeTunnels: 3 });
     expect((await owner.post("/api/agent/heartbeat", { version: "x", activeTunnels: 0 })).status).toBe(403);
+  });
+});
+
+describe("CLI tokens (FR-AUTH-002/003/004)", () => {
+  it("FR-AUTH-003 refresh rotates; reusing a used refresh token signs the device out", async () => {
+    const { owner } = await signupOwner(app);
+    const { token, refreshToken, deviceId } = await loginDevice(app, owner);
+    const first = await request(app).post("/api/cli/token/refresh").send({ refreshToken });
+    expect(first.status).toBe(200);
+    expect(first.body.data.refreshToken).not.toBe(refreshToken);
+    expect((await cli(app, first.body.data.accessToken).get("/api/cli/whoami")).status).toBe(200);
+
+    const events: BusEvent[] = [];
+    const stop = bus.subscribe((e) => events.push(e));
+    const reused = await request(app).post("/api/cli/token/refresh").send({ refreshToken });
+    expect(reused.status).toBe(401);
+    expect(reused.body.error.code).toBe("REFRESH_TOKEN_REUSED");
+    expect(events.some((e) => e.type === "access.revoked" && e.deviceId === deviceId)).toBe(true);
+    // Every token of that device is now dead, including the newest pair.
+    expect((await cli(app, first.body.data.accessToken).get("/api/cli/whoami")).status).toBe(401);
+    expect(
+      (await request(app).post("/api/cli/token/refresh").send({ refreshToken: first.body.data.refreshToken }))
+        .status,
+    ).toBe(401);
+    expect((await cli(app, token).get("/api/cli/whoami")).status).toBe(401);
+    stop();
+  });
+
+  it("FR-AUTH-002 a legacy device token is exchanged once, then stops working", async () => {
+    const { owner, userId } = await signupOwner(app);
+    const { DeviceModel } = await import("../../src/models/device.model.js");
+    const { hashToken } = await import("../../src/crypto/tokens.js");
+    const legacy = "cbd_legacy_token_for_upgrade_test_0000000000";
+    await DeviceModel.create({
+      userId,
+      name: "old-laptop",
+      os: "darwin",
+      tokenHash: hashToken(legacy),
+      expiresAt: new Date(Date.now() + 86_400_000),
+    });
+    expect((await cli(app, legacy).get("/api/cli/whoami")).status).toBe(200);
+    const exchanged = await request(app).post("/api/cli/token/refresh").send({ refreshToken: legacy });
+    expect(exchanged.status).toBe(200);
+    expect((await cli(app, exchanged.body.data.accessToken).get("/api/cli/whoami")).status).toBe(200);
+    expect((await cli(app, legacy).get("/api/cli/whoami")).status).toBe(401);
+    expect((await request(app).post("/api/cli/token/refresh").send({ refreshToken: legacy })).status).toBe(
+      401,
+    );
+    void owner;
+  });
+
+  it("FR-AUTH-004 access tokens are ES256 JWTs verifiable with the published JWKS; expired or tampered ones fail", async () => {
+    const { owner } = await signupOwner(app);
+    const { token, deviceId } = await loginDevice(app, owner);
+    const keys = await request(app).get("/.well-known/jwks.json");
+    expect(keys.status).toBe(200);
+    const [head, payload] = token.split(".");
+    const header = JSON.parse(Buffer.from(head ?? "", "base64url").toString());
+    const claims = JSON.parse(Buffer.from(payload ?? "", "base64url").toString());
+    expect(header).toMatchObject({ alg: "ES256" });
+    expect(claims).toMatchObject({ did: deviceId, sid: deviceId });
+    expect(claims.exp - claims.iat).toBe(900);
+    const jwk = keys.body.keys.find((k: { kid: string }) => k.kid === header.kid);
+    const { verifyJwt } = await import("../../src/crypto/jwt.js");
+    const { createPublicKey } = await import("node:crypto");
+    expect(verifyJwt(token, "ES256", createPublicKey({ key: jwk, format: "jwk" }))).not.toBeNull();
+
+    const { signAccessToken } = await import("../../src/services/token.service.js");
+    const expired = await signAccessToken({ id: deviceId, userId: claims.sub }, -10);
+    expect((await cli(app, expired.accessToken).get("/api/cli/whoami")).status).toBe(401);
+    const tampered = `${head}.${Buffer.from(JSON.stringify({ ...claims, sub: "000000000000000000000000" })).toString("base64url")}.${token.split(".")[2]}`;
+    expect((await cli(app, tampered).get("/api/cli/whoami")).status).toBe(401);
   });
 });

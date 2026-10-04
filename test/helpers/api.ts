@@ -82,5 +82,9 @@ export async function loginDevice(app: Express, member: ReturnType<typeof browse
   const token = await request(app)
     .post("/api/cli/device/token")
     .send({ deviceCode: start.body.data.deviceCode });
-  return { token: token.body.data.token as string, deviceId: token.body.data.device.id as string };
+  return {
+    token: token.body.data.accessToken as string,
+    refreshToken: token.body.data.refreshToken as string,
+    deviceId: token.body.data.device.id as string,
+  };
 }

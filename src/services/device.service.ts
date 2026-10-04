@@ -4,13 +4,14 @@ import { getEnv } from "../config/env.js";
 import { hashToken, newToken, newUserCode } from "../crypto/tokens.js";
 import { AppError } from "../errors/app-error.js";
 import { bus } from "../events/bus.js";
-import { DEVICE_TOKEN_PREFIX } from "../middlewares/auth.middleware.js";
 import { DeviceModel } from "../models/device.model.js";
 import { DeviceCodeModel } from "../models/device-code.model.js";
 import { MembershipModel } from "../models/membership.model.js";
+import { RefreshTokenModel } from "../models/refresh-token.model.js";
 import { UserModel } from "../models/user.model.js";
 import { isAdminRole, requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
+import { issueTokens } from "./token.service.js";
 
 const CODE_TTL_MS = 10 * 60_000;
 const DEVICE_TTL_MS = 30 * 86_400_000;
@@ -107,12 +108,12 @@ export async function pollDeviceToken(input: z.infer<typeof PollDeviceBody>) {
     throw new AppError("NOT_FOUND", { message: 'Unknown login request. Run "npx cb login" again.' });
   if (code.expiresAt.getTime() <= Date.now()) throw new AppError("DEVICE_CODE_EXPIRED");
   if (!code.approvedBy) throw new AppError("DEVICE_AUTH_PENDING");
-  const token = newToken(DEVICE_TOKEN_PREFIX);
   const device = await DeviceModel.create({
     userId: code.approvedBy,
     name: code.deviceName,
     os: code.os,
-    tokenHash: hashToken(token),
+    // No long-lived bearer any more: the device signs in with access + refresh tokens (FR-AUTH-002).
+    tokenHash: hashToken(newToken("unused_")),
     expiresAt: new Date(Date.now() + DEVICE_TTL_MS),
     lastSeenAt: new Date(),
   });
@@ -129,8 +130,9 @@ export async function pollDeviceToken(input: z.infer<typeof PollDeviceBody>) {
       target: device.name,
     });
   }
+  const tokens = await issueTokens({ id: device._id.toHexString(), userId: code.approvedBy.toHexString() });
   return {
-    token,
+    ...tokens,
     device: { id: device._id.toHexString(), name: device.name },
     user: { id: code.approvedBy.toHexString(), name: user?.name ?? "", email: user?.email ?? "" },
   };
@@ -206,6 +208,7 @@ export async function revokeDevice(actorId: string, deviceId: Types.ObjectId): P
   }
   device.revokedAt = new Date();
   await device.save();
+  await RefreshTokenModel.deleteMany({ deviceId });
   bus.publish({
     type: "access.revoked",
     scope: "device",

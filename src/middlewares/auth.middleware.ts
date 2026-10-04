@@ -6,6 +6,7 @@ import { getContext, runWithContext } from "../logger/context.js";
 import { DeviceModel } from "../models/device.model.js";
 import { UserModel } from "../models/user.model.js";
 import { WebSessionModel } from "../models/web-session.model.js";
+import { verifyAccessToken } from "../services/token.service.js";
 
 export const SESSION_COOKIE = "cb_session";
 export const CSRF_HEADER = "x-cb-csrf";
@@ -21,15 +22,32 @@ export interface AuthContext {
   deviceId?: string;
 }
 
-/** Resolves a device bearer token to its user (also used by the tunnel and SSE). */
+const JWT_SHAPE = /^[\w-]+\.[\w-]+\.[\w-]+$/;
+
+/**
+ * Resolves a CLI bearer to its user (also used by the tunnel and SSE): a short-lived access token (ES256 JWT,
+ * FR-AUTH-004), or a legacy long-lived device token until its first refresh. Device and user status are
+ * always re-checked so revocation is immediate.
+ */
 export async function resolveDeviceToken(token: string): Promise<AuthContext | undefined> {
-  if (!token.startsWith(DEVICE_TOKEN_PREFIX)) return undefined;
   const now = new Date();
-  const device = await DeviceModel.findOne({
-    tokenHash: hashToken(token),
-    revokedAt: null,
-    expiresAt: { $gt: now },
-  });
+  let device: InstanceType<typeof DeviceModel> | null = null;
+  if (JWT_SHAPE.test(token)) {
+    const claims = await verifyAccessToken(token);
+    if (!claims) return undefined;
+    device = await DeviceModel.findOne({
+      _id: claims.deviceId,
+      userId: claims.userId,
+      revokedAt: null,
+      expiresAt: { $gt: now },
+    });
+  } else if (token.startsWith(DEVICE_TOKEN_PREFIX)) {
+    device = await DeviceModel.findOne({
+      tokenHash: hashToken(token),
+      revokedAt: null,
+      expiresAt: { $gt: now },
+    });
+  }
   if (!device) return undefined;
   const user = await UserModel.findOne({ _id: device.userId, disabledAt: null }).select("_id").lean();
   if (!user) return undefined;

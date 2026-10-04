@@ -646,6 +646,48 @@ paths:
                       - data
         "400":
           $ref: "#/components/responses/BadRequest"
+  /api/cli/token/refresh:
+    post:
+      operationId: refreshTokens
+      tags:
+        - Devices
+      summary: Rotate CLI tokens (FR-AUTH-003)
+      description: Exchanges a refresh token (or, once, a legacy cbd_ device token) for a new token pair. A refresh token that was already used signs the device out (REFRESH_TOKEN_REUSED) and closes its tunnels.
+      security:
+        - {}
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken:
+                  type: string
+                  minLength: 10
+                  writeOnly: true
+              required:
+                - refreshToken
+      responses:
+        "200":
+          description: New token pair
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/TokenPair"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/cli/device/token:
     post:
       operationId: pollDeviceToken
@@ -3194,30 +3236,43 @@ components:
         - verificationUrl
         - interval
         - expiresIn
-    DeviceTokenResult:
+    TokenPair:
       type: object
+      description: FR-AUTH-002/003/004 — a 15-minute ES256 access token (claims sub, did, sid; keys at /.well-known/jwks.json) and a rotating refresh token.
       properties:
-        token:
+        accessToken:
           type: string
-          description: Device bearer token (prefix cbd_), returned exactly once.
-          examples:
-            - cbd_example
-        device:
-          type: object
-          properties:
-            id:
-              $ref: "#/components/schemas/ObjectId"
-            name:
-              type: string
-          required:
-            - id
-            - name
-        user:
-          $ref: "#/components/schemas/User"
+          description: ES256 JWT used as the bearer for /api/cli/*, /api/agent/* and /tunnel.
+        accessTokenExpiresAt:
+          type: string
+          format: date-time
+        refreshToken:
+          type: string
+          description: Opaque (prefix cbr_); single use — presenting a used one signs the device out.
       required:
-        - token
-        - device
-        - user
+        - accessToken
+        - accessTokenExpiresAt
+        - refreshToken
+    DeviceTokenResult:
+      allOf:
+        - $ref: "#/components/schemas/TokenPair"
+        - type: object
+          properties:
+            device:
+              type: object
+              properties:
+                id:
+                  $ref: "#/components/schemas/ObjectId"
+                name:
+                  type: string
+              required:
+                - id
+                - name
+            user:
+              $ref: "#/components/schemas/User"
+          required:
+            - device
+            - user
     DeviceApproval:
       type: object
       properties:
