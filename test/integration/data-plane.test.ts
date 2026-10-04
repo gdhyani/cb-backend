@@ -442,10 +442,17 @@ describe("revocation (J7, FR-GW-007, S4)", () => {
     const orders = client.db("shop").collection("cb_slow");
     await orders.insertOne({ n: 1 });
     // Server-side sleep keeps the request in flight while access is revoked.
-    const slow = orders.find({ $where: "sleep(2000) || true" }).toArray();
+    // Capture the outcome right away so the rejection is never briefly unhandled.
+    const slow = orders
+      .find({ $where: "sleep(2000) || true" })
+      .toArray()
+      .then(
+        () => new Error("query unexpectedly succeeded"),
+        (err: Error) => err,
+      );
     await new Promise((r) => setTimeout(r, 300));
     await owner.delete(`/api/devices/${deviceId}`);
-    await expect(slow).rejects.toThrow(/cb: access revoked by admin/);
+    expect((await slow).message).toMatch(/cb: access revoked by admin/);
     await client.close(true);
     listener.close();
   });

@@ -270,6 +270,7 @@ describe.skipIf(!PASSWORD)("SQL, SMTP and AWS adapters through tunnels (§10.8)"
     );
 
     // Back to default: the live readonly session is cut, the next connection writes as the admin user.
+    reader.on("error", () => undefined); // FATAL from the gateway, then "connection terminated"
     const ended = new Promise((r) => reader.once("error", r).once("end", r));
     await owner.patch(`/api/grants/${grant.id}`, { resourceProfiles: [] });
     await ended;
@@ -293,9 +294,13 @@ describe.skipIf(!PASSWORD)("SQL, SMTP and AWS adapters through tunnels (§10.8)"
       connectionString: fill(envOf("postgres").DATABASE_URL ?? "", pgL.port),
     });
     await pgClient.connect();
+    const pgErrors: Error[] = [];
+    // pg emits the gateway's FATAL error, then "connection terminated" once the socket closes.
+    pgClient.on("error", (e) => pgErrors.push(e));
     const pgError = new Promise<Error>((resolve) => pgClient.once("error", resolve));
 
     const myConn = await mysql.createConnection(fill(envOf("mysql").MYSQL_URL ?? "", myL.port));
+    myConn.on("error", () => undefined);
     const myError = new Promise<Error>((resolve) => myConn.once("error", resolve));
 
     // SMTP: open a raw session and read the 421 the gateway sends.
