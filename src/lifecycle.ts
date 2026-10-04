@@ -4,11 +4,12 @@ import { createApp } from "./app.js";
 import { clients } from "./clients/index.js";
 import type { Client } from "./clients/types.js";
 import { type Env, EnvError, loadEnv, setEnv } from "./config/env.js";
-import { GRANT_SWEEP_INTERVAL_MS, SHUTDOWN_TIMEOUT_MS } from "./constants.js";
+import { GRANT_SWEEP_INTERVAL_MS, SHUTDOWN_TIMEOUT_MS, WEBHOOK_SWEEP_INTERVAL_MS } from "./constants.js";
 import { logger } from "./logger/logger.js";
 import { createServer } from "./server.js";
 import { closeAllAgentStreams } from "./services/agent-events.service.js";
 import { sweepExpiredGrants } from "./services/grant.service.js";
+import { sweepWebhooks } from "./services/webhook-delivery.service.js";
 
 export interface StartupOptions {
   env?: NodeJS.ProcessEnv;
@@ -79,12 +80,25 @@ export async function startup(opts: StartupOptions = {}): Promise<RunningServer>
     );
   }, GRANT_SWEEP_INTERVAL_MS);
   sweeper.unref();
+  // FR-WH-003: re-route, re-push due deliveries, expire after 24 h; one sweep at a time.
+  let sweeping = false;
+  const webhookSweeper = setInterval(() => {
+    if (sweeping) return;
+    sweeping = true;
+    sweepWebhooks()
+      .catch((err: unknown) => logger.error(`webhooks: sweep failed — ${message(err)}`))
+      .finally(() => {
+        sweeping = false;
+      });
+  }, WEBHOOK_SWEEP_INTERVAL_MS);
+  webhookSweeper.unref();
 
   let shuttingDown: Promise<void> | undefined;
   const shutdown = (reason: string, exitCode = 0): Promise<void> => {
     shuttingDown ??= (async () => {
       logger.info(`shutdown started (${reason})`);
       clearInterval(sweeper);
+      clearInterval(webhookSweeper);
       gateway.closeAll();
       closeAllAgentStreams();
       const force = setTimeout(() => {

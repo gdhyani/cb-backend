@@ -19,6 +19,7 @@ import {
   parseSmtpUri,
 } from "../utils/connection-uri.js";
 import { HttpsOnlyUrl, UpstreamUrl } from "../utils/upstream-url.js";
+import { WEBHOOK_PROVIDERS } from "../webhooks/signing.js";
 import { loadEnvironment, requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { touchEnvironment } from "./environment.service.js";
@@ -36,6 +37,7 @@ export const BROKERED_FIELDS: Record<ResourceKind, readonly string[]> = {
   aws: ["accessKeyId", "secretAccessKey", "endpoint", "region"],
   "google-sa": ["credentialsJson", "projectId", "clientEmail", "privateKey"],
   apns: ["key", "keyId", "teamId"],
+  webhook: ["secret"],
 };
 
 /** The variable that carries a service's secret: the one the admin names in "Add variable" (D2). */
@@ -50,6 +52,7 @@ export const MAIN_FIELD: Record<ResourceKind, string> = {
   aws: "secretAccessKey",
   "google-sa": "credentialsJson",
   apns: "key",
+  webhook: "secret",
 };
 
 const GOOGLE_DEFAULT_HOSTS = ["oauth2.googleapis.com:443", "fcm.googleapis.com:443"];
@@ -92,6 +95,15 @@ const AuthSchemeEnum = z.enum(["bearer", "x-api-key", "basic-password", "header"
 const AuthHeader = z
   .string()
   .regex(/^[a-z0-9][a-z0-9-]{0,63}$/, "a lowercase header name, e.g. x-goog-api-key");
+/** Where the agent posts webhooks inside the developer's app: a path only (always 127.0.0.1). */
+const WebhookPath = z
+  .string()
+  .max(300)
+  // "//host" would be protocol-relative (another host) for any client resolving it against a base URL.
+  .regex(/^\/(?!\/)[^\s?#\\]*(\?[^\s#]*)?$/, "a path in your app, e.g. /api/webhooks/stripe");
+const WebhookPort = z.number().int().min(1).max(65_535);
+const WebhookProviderEnum = z.enum(WEBHOOK_PROVIDERS);
+
 /** UI hint only (which preset or dashboard type made this service); never read by the gateway. */
 const Provider = z.string().regex(/^[a-z0-9-]{1,40}$/);
 
@@ -175,6 +187,14 @@ export const CreateResourceBody = z
       redirectHosts: z.array(HostPort).max(10).optional(),
     }),
     z.object({
+      kind: z.literal("webhook"),
+      name: Name,
+      provider: WebhookProviderEnum,
+      path: WebhookPath,
+      port: WebhookPort.optional(),
+      signingSecret: z.string().trim().min(8).max(500),
+    }),
+    z.object({
       kind: z.literal("oauth"),
       name: Name,
       tokenUrl: HttpsOnlyUrl,
@@ -184,6 +204,12 @@ export const CreateResourceBody = z
     }),
   ])
   .superRefine((b, ctx) => {
+    if (b.kind === "webhook" && b.provider === "stripe" && !b.signingSecret.startsWith("whsec_"))
+      ctx.addIssue({
+        code: "custom",
+        path: ["signingSecret"],
+        message: "a Stripe signing secret starts with whsec_ (Developers → Webhooks → your endpoint)",
+      });
     if (b.kind === "http" && b.authScheme === "header" && !b.authHeader)
       ctx.addIssue({ code: "custom", path: ["authHeader"], message: "required with the named-header style" });
   });
@@ -210,6 +236,10 @@ export const UpdateResourceBody = z.object({
   tokenUrl: HttpsOnlyUrl.optional(),
   name: Name.optional(),
   connectionUri: z.string().min(8).optional(),
+  signingSecret: z.string().trim().min(8).max(500).optional(),
+  path: WebhookPath.optional(),
+  /** null clears the default port. */
+  port: WebhookPort.nullable().optional(),
   /** "" removes a previously stored CA certificate. */
   caCert: PemCertificates.or(z.literal("")).optional(),
   apiKey: z.string().min(1).optional(),
@@ -235,9 +265,17 @@ export interface ResourceDto {
   disabled: boolean;
   brokeredFields: readonly string[];
   createdAt: string;
+  /** Webhook services: the URL to paste into the provider's webhook settings (FR-WH-001). */
+  webhookUrl?: string;
 }
 
 const masterKey = () => Buffer.from(getEnv().MASTER_KEY, "base64");
+
+export function webhookUrlOf(serviceId: string): string {
+  const env = getEnv();
+  const base = (env.PUBLIC_URL ?? `http://localhost:${env.PORT}`).replace(/\/+$/, "");
+  return `${base}/api/hooks/${serviceId}`;
+}
 
 function toDto(r: {
   _id: Types.ObjectId;
@@ -261,6 +299,7 @@ function toDto(r: {
     disabled: Boolean(r.disabledAt),
     brokeredFields: BROKERED_FIELDS[kind],
     createdAt: (r.createdAt ?? new Date()).toISOString(),
+    ...(kind === "webhook" ? { webhookUrl: webhookUrlOf(r._id.toHexString()) } : {}),
   };
 }
 
@@ -319,6 +358,17 @@ export function configAndSecret(
       redirectHosts: hostsFrom(APNS_DEFAULT_HOSTS),
     };
     return { config, secret: input.privateKey as string | undefined };
+  }
+  if (kind === "webhook") {
+    const config: Record<string, unknown> = { ...current };
+    if (input.provider) {
+      config.provider = input.provider;
+      config.fakePrefix = input.provider === "stripe" ? "whsec_" : "";
+    }
+    if (input.path !== undefined) config.path = input.path;
+    if (input.port === null) delete config.port;
+    else if (input.port !== undefined) config.port = input.port;
+    return { config, secret: input.signingSecret as string | undefined };
   }
   if (kind === "oauth") {
     const tokenUrl = (input.tokenUrl as string | undefined) ?? (current.tokenUrl as string | undefined) ?? "";
@@ -469,6 +519,7 @@ export async function updateResource(
     aws: "secretAccessKey",
     "google-sa": "serviceAccountJson",
     apns: "privateKey",
+    webhook: "signingSecret",
   };
   const host = (u: unknown) => {
     try {

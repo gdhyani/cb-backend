@@ -11,6 +11,8 @@ export type RevocationScope =
 
 export type BusEvent =
   | { type: "config.changed"; environmentId: string }
+  /** FR-WH-003: push this webhook delivery to its device's event stream (wherever that stream is open). */
+  | { type: "webhook.deliver"; deliveryId: string; deviceId: string; environmentId: string }
   | {
       type: "access.revoked";
       scope: RevocationScope;
