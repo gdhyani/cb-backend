@@ -15,7 +15,7 @@ import { assertRuntimeAccess } from "../services/access.service.js";
 import { recordAudit } from "../services/audit.service.js";
 import { loadOrgCa } from "../services/org-ca.service.js";
 import { DEFAULT_PROFILE, readProfileSecret, resolveProfile } from "../services/profile.service.js";
-import { readResourceSecret } from "../services/resource.service.js";
+import { readResourceSecret } from "../services/resource-secret.service.js";
 import { eventConcerns, revalidate } from "../services/runtime-access.service.js";
 import { createApnsHandler } from "./http/apns-adapter.js";
 import { createAwsHandler } from "./http/aws-adapter.js";

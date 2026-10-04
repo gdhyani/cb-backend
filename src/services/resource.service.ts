@@ -2,7 +2,7 @@ import { X509Certificate } from "node:crypto";
 import type { Types } from "mongoose";
 import { z } from "zod";
 import { getEnv } from "../config/env.js";
-import { decryptSecret, encryptSecret } from "../crypto/envelope.js";
+import { encryptSecret } from "../crypto/envelope.js";
 import { AppError } from "../errors/app-error.js";
 import { CredentialProfileModel } from "../models/credential-profile.model.js";
 import { type ResourceKind, ResourceModel } from "../models/resource.model.js";
@@ -20,6 +20,8 @@ import { HttpsOnlyUrl, UpstreamUrl } from "../utils/upstream-url.js";
 import { loadEnvironment, requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { touchEnvironment } from "./environment.service.js";
+import { readResourceSecret } from "./resource-secret.service.js";
+import { runDraftTest } from "./resource-test.service.js";
 
 /** Which variable fields each resource kind can broker. */
 export const BROKERED_FIELDS: Record<ResourceKind, readonly string[]> = {
@@ -196,6 +198,8 @@ export const UpdateResourceBody = z.object({
   basePath: z.string().optional(),
   redirectHosts: z.array(HostPort).max(10).optional(),
   disabled: z.boolean().optional(),
+  /** D9: test the merged credential/config before storing; 422 SERVICE_TEST_FAILED when it fails. */
+  test: z.boolean().optional(),
 });
 
 export interface ResourceDto {
@@ -426,6 +430,11 @@ export async function updateResource(
   const resource = await loadResource(actorId, resourceId, "admin");
   const kind = resource.kind as ResourceKind;
   const { config, secret } = configAndSecret(kind, input, resource.config as Record<string, unknown>);
+  if (input.test) {
+    const candidate = secret ?? (await readResourceSecret(resourceId));
+    const result = await runDraftTest(kind, candidate, config);
+    if (!result.ok) throw new AppError("SERVICE_TEST_FAILED", { message: result.message });
+  }
   const update: Record<string, unknown> = { config };
   if (input.name) update.name = input.name;
   if (secret)
@@ -462,11 +471,4 @@ export async function deleteResource(actorId: string, resourceId: Types.ObjectId
     action: "resource.deleted",
     target: resource.name,
   });
-}
-
-/** Gateway-only: decrypts the real credential for one use (FR-GW-005). Never returned by any API. */
-export async function readResourceSecret(resourceId: Types.ObjectId): Promise<string> {
-  const doc = await ResourceModel.findById(resourceId).select("+credentials").lean();
-  if (!doc?.credentials) throw new AppError("NOT_FOUND", { message: "Resource credentials not found." });
-  return decryptSecret(masterKey(), doc.credentials);
 }

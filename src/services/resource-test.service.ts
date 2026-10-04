@@ -18,7 +18,7 @@ import { MYSQL_TLS_HINT, parseMongoUri } from "../utils/connection-uri.js";
 import { requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { DEFAULT_PROFILE, readProfileSecret } from "./profile.service.js";
-import { readResourceSecret } from "./resource.service.js";
+import { readResourceSecret } from "./resource-secret.service.js";
 
 const TIMEOUT_MS = 8000;
 

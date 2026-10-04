@@ -701,3 +701,26 @@ describe("D11 private-only plain http upstreams (FR-GW-004)", () => {
     expect(tokenUrl.status).toBe(400);
   });
 });
+
+describe("D9 replace value is tested before it is stored (J2)", () => {
+  it("PATCH with test:true refuses a failing credential with 422 and keeps the old one", async () => {
+    const ctx = await signupOwner(app);
+    const project = await ctx.owner.post(`/api/orgs/${ctx.orgId}/projects`, { name: "P" });
+    const envId = project.body.data.environments[0].id as string;
+    const r = await ctx.owner.post(`/api/environments/${envId}/resources`, {
+      kind: "mongodb",
+      name: "db",
+      connectionUri: `${mongo.uri}shop`,
+    });
+    expect(r.status).toBe(201);
+    const bad = await ctx.owner.patch(`/api/resources/${r.body.data.id}`, {
+      connectionUri: "mongodb://u:WRONG_PW_88@127.0.0.1:1/shop",
+      test: true,
+    });
+    expect(bad.status).toBe(422);
+    expect(bad.body.error.code).toBe("SERVICE_TEST_FAILED");
+    expect(JSON.stringify(bad.body)).not.toContain("WRONG_PW_88");
+    const still = await ctx.owner.post(`/api/resources/${r.body.data.id}/test`, {});
+    expect(still.body.data.ok).toBe(true);
+  });
+});

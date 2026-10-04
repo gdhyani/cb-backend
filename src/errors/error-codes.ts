@@ -18,6 +18,7 @@ export const ERROR_CODES = {
   DEVICE_AUTH_PENDING: { statusCode: 400, message: "Waiting for approval in the dashboard." },
   NOT_FOUND: { statusCode: 404, message: "The requested resource was not found." },
   ROUTE_NOT_FOUND: { statusCode: 404, message: "This endpoint does not exist." },
+  SERVICE_TEST_FAILED: { statusCode: 422, message: "The connection test failed; nothing was saved." },
   CONFLICT: { statusCode: 409, message: "The resource already exists or conflicts with another." },
   EMAIL_TAKEN: { statusCode: 409, message: "An account with this email already exists." },
   LAST_OWNER: { statusCode: 409, message: "An organization needs at least one owner." },
