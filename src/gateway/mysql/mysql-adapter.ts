@@ -169,7 +169,7 @@ export const mysqlAdapter: StreamAdapter = async (client: Duplex, ctx, hooks) =>
     const secure = tls.connect({
       socket: upstream as net.Socket,
       servername: net.isIP(real.host) ? undefined : real.host,
-      ca: upstreamCa(),
+      ca: upstreamCa(ctx.resource.config.caCert),
     });
     try {
       await connected(secure, "secureConnect", `mysql ${real.host}:${real.port} (tls)`);

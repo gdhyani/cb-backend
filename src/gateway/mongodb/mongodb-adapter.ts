@@ -17,7 +17,11 @@ import { authenticateScramSha256 } from "./scram.js";
 export const mongodbAdapter: StreamAdapter = async (client, ctx, hooks) => {
   const real = parseMongoUri(ctx.secret);
   const seeds = await seedList(real);
-  const upstream = await connectPrimary(seeds.hosts, seeds.tls, seeds.tls ? upstreamCa() : undefined);
+  const upstream = await connectPrimary(
+    seeds.hosts,
+    seeds.tls,
+    seeds.tls ? upstreamCa(ctx.resource.config.caCert) : undefined,
+  );
   client.on("close", () => upstream.destroy());
   upstream.on("close", () => client.destroy());
   upstream.on("error", () => client.destroy());

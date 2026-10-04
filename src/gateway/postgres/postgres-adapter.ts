@@ -32,7 +32,12 @@ const AUTH_SASL = 10;
 const AUTH_SASL_CONTINUE = 11;
 const AUTH_SASL_FINAL = 12;
 
-async function openUpstream(host: string, port: number, sslmode: string | null): Promise<Duplex> {
+async function openUpstream(
+  host: string,
+  port: number,
+  sslmode: string | null,
+  caCert?: unknown,
+): Promise<Duplex> {
   const socket = net.connect({ host, port });
   socket.pause();
   await connected(socket, "connect", `postgres ${host}:${port}`);
@@ -47,7 +52,11 @@ async function openUpstream(host: string, port: number, sslmode: string | null):
     throw new UpstreamError("postgres server does not offer TLS");
   }
   // Upstream TLS always verifies (FR-GW-004), whatever sslmode the stored URI uses.
-  const secure = tls.connect({ socket, servername: net.isIP(host) ? undefined : host, ca: upstreamCa() });
+  const secure = tls.connect({
+    socket,
+    servername: net.isIP(host) ? undefined : host,
+    ca: upstreamCa(caCert),
+  });
   secure.pause();
   await connected(secure, "secureConnect", `postgres ${host}:${port} (tls)`);
   return secure;
@@ -128,7 +137,7 @@ export const postgresAdapter: StreamAdapter = async (client: Duplex, ctx, hooks)
     return;
   }
 
-  const upstream = await openUpstream(real.host, real.port, sslmode);
+  const upstream = await openUpstream(real.host, real.port, sslmode, ctx.resource.config.caCert);
   client.on("close", () => upstream.destroy());
   upstream.on("close", () => client.destroy());
   upstream.on("error", () => client.destroy());

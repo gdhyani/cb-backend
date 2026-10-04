@@ -22,7 +22,13 @@ export function resetUpstreamDispatcher(): void {
 }
 
 /** CA bundle for raw TLS upstreams (redis rediss://, mongodb tls=true). */
-export function upstreamCa(): string[] | undefined {
+/**
+ * Trusted roots for an upstream TLS connection: system roots, plus the resource's own CA certificate (self-hosted
+ * or private-CA databases, production-safe) and the test-only UPSTREAM_EXTRA_CA_FILE. Undefined = system roots.
+ */
+export function upstreamCa(resourceCa?: unknown): string[] | undefined {
   const extraCaFile = getEnv().UPSTREAM_EXTRA_CA_FILE;
-  return extraCaFile ? [...tls.rootCertificates, fs.readFileSync(extraCaFile, "utf8")] : undefined;
+  const own = typeof resourceCa === "string" && resourceCa ? [resourceCa] : [];
+  if (!extraCaFile && own.length === 0) return undefined;
+  return [...tls.rootCertificates, ...(extraCaFile ? [fs.readFileSync(extraCaFile, "utf8")] : []), ...own];
 }

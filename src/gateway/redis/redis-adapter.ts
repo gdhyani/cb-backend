@@ -19,7 +19,12 @@ export const redisAdapter: StreamAdapter = async (client: Duplex, ctx, _hooks) =
   const real = parseRedisUri(ctx.secret);
   const upstream =
     real.protocol === "rediss"
-      ? tls.connect({ host: real.host, port: real.port, servername: real.host, ca: upstreamCa() })
+      ? tls.connect({
+          host: real.host,
+          port: real.port,
+          servername: real.host,
+          ca: upstreamCa(ctx.resource.config.caCert),
+        })
       : net.connect({ host: real.host, port: real.port });
   upstream.pause();
   await connected(
