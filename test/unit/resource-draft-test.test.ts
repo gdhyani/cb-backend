@@ -37,3 +37,42 @@ describe("draft test hits an authenticated path (Save & test must reject bad key
     srv.close();
   });
 });
+
+describe("Save & test for Basic-auth and 400-on-bad-key APIs (review I1, M2)", () => {
+  it("I1 Basic auth: the stored key ID is the username, so a valid Razorpay-style secret passes", async () => {
+    const http = await import("node:http");
+    const want = `Basic ${Buffer.from("rzp_live_ID:secret").toString("base64")}`;
+    const srv = http.createServer((req, res) =>
+      res.writeHead(req.headers.authorization === want ? 200 : 401).end(),
+    );
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const upstreamUrl = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    const config = {
+      upstreamUrl,
+      authScheme: "basic-password",
+      basicUser: "rzp_live_ID",
+      testPath: "/v1/payments",
+    };
+    expect((await runDraftTest("http", "secret", config)).ok).toBe(true);
+    expect((await runDraftTest("http", "wrong", config)).ok).toBe(false);
+    srv.close();
+  });
+
+  it("M2 with a testPath, HTTP 400 (Gemini's API_KEY_INVALID) counts as a rejected key", async () => {
+    const http = await import("node:http");
+    const srv = http.createServer((req, res) =>
+      res.writeHead(req.headers["x-goog-api-key"] === "good" ? 200 : 400).end(),
+    );
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const upstreamUrl = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    const config = {
+      upstreamUrl,
+      authScheme: "header",
+      authHeader: "x-goog-api-key",
+      testPath: "/v1beta/models",
+    };
+    expect((await runDraftTest("http", "bad", config)).ok).toBe(false);
+    expect((await runDraftTest("http", "good", config)).ok).toBe(true);
+    srv.close();
+  });
+});

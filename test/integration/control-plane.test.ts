@@ -789,3 +789,40 @@ describe("J4 removing a service cleans up per-person logins", () => {
     expect(stored?.resourceProfiles).toEqual([]);
   });
 });
+
+describe("review I5, M1: PATCH safety", () => {
+  async function api() {
+    const ctx = await signupOwner(app);
+    const project = await ctx.owner.post(`/api/orgs/${ctx.orgId}/projects`, { name: "P" });
+    const envId = project.body.data.environments[0].id as string;
+    const r = await ctx.owner.post(`/api/environments/${envId}/resources`, {
+      kind: "http",
+      name: "api",
+      upstreamUrl: "https://api.example.com",
+      apiKey: "STORED_KEY_1",
+    });
+    return { owner: ctx.owner, id: r.body.data.id as string };
+  }
+
+  it("I5 moving a stored key to another host needs the key again", async () => {
+    const { owner, id } = await api();
+    const moved = await owner.patch(`/api/resources/${id}`, { upstreamUrl: "https://collector.example" });
+    expect(moved.status).toBe(400);
+    expect(moved.body.error.details[0].path).toBe("apiKey");
+    const samePath = await owner.patch(`/api/resources/${id}`, { upstreamUrl: "https://api.example.com/v2" });
+    expect(samePath.status).toBe(200);
+    const withKey = await owner.patch(`/api/resources/${id}`, {
+      upstreamUrl: "https://collector.example",
+      apiKey: "NEW",
+    });
+    expect(withKey.status).toBe(200);
+  });
+
+  it("M1 the named-header style needs a header name on PATCH too", async () => {
+    const { owner, id } = await api();
+    const bad = await owner.patch(`/api/resources/${id}`, { authScheme: "header" });
+    expect(bad.status).toBe(400);
+    const ok = await owner.patch(`/api/resources/${id}`, { authScheme: "header", authHeader: "x-key" });
+    expect(ok.status).toBe(200);
+  });
+});

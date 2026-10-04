@@ -147,15 +147,22 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
     // An authenticated path when the preset knows one (a bare "/" often answers 404 whatever the key).
     const path = String(config.testPath ?? config.basePath ?? "");
     const base = `${String(config.upstreamUrl ?? "").replace(/\/$/, "")}${path}`;
+    const basicUser = typeof config.basicUser === "string" ? config.basicUser : "";
     const headers = injectCredential(
       (config.authScheme as AuthScheme | undefined) ?? "bearer",
-      { "user-agent": "cb-connection-test" },
+      {
+        "user-agent": "cb-connection-test",
+        // Basic auth: the key ID (public) is the username, the stored secret the password.
+        ...(basicUser ? { authorization: `Basic ${Buffer.from(`${basicUser}:`).toString("base64")}` } : {}),
+      },
       secret,
       config.authHeader as string | undefined,
     );
     const res = await request(base || "/", { method: "GET", headers, dispatcher: upstreamDispatcher() });
     await res.body.dump();
-    if (res.statusCode === 401 || res.statusCode === 403)
+    // On an authenticated test path some APIs answer a bad key with 400 (Gemini: API_KEY_INVALID).
+    const rejected = [401, 403, ...(config.testPath ? [400] : [])];
+    if (rejected.includes(res.statusCode))
       return { ok: false, message: `The API rejected the key (HTTP ${res.statusCode})` };
     return {
       ok: true,

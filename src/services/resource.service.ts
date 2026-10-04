@@ -139,6 +139,8 @@ export const CreateResourceBody = z
         .string()
         .regex(/^\/[^\s]*$/, "must start with /")
         .optional(),
+      /** Basic auth: the public key ID sent as the username (Razorpay key_id). */
+      basicUser: z.string().max(200).optional(),
       apiKey: z.string().min(1),
       fakePrefix: z.string().max(20).default("cb_"),
       basePath: z
@@ -383,6 +385,7 @@ export function configAndSecret(
     "authHeader",
     "provider",
     "testPath",
+    "basicUser",
     "fakePrefix",
     "basePath",
     "redirectHosts",
@@ -451,7 +454,42 @@ export async function updateResource(
 ): Promise<ResourceDto> {
   const resource = await loadResource(actorId, resourceId, "admin");
   const kind = resource.kind as ResourceKind;
-  const { config, secret } = configAndSecret(kind, input, resource.config as Record<string, unknown>);
+  const current = (resource.config ?? {}) as Record<string, unknown>;
+  const { config: merged, secret } = configAndSecret(kind, input, current);
+  const config = merged as Record<string, unknown>;
+  // M1: the merged config must stay usable.
+  if (kind === "http" && config.authScheme === "header" && !config.authHeader)
+    throw new AppError("VALIDATION_FAILED", {
+      details: [{ path: "authHeader", message: "required with the named-header style" }],
+    });
+  // I5: sending the stored key somewhere new needs the key again (no one can redirect a secret they can't see).
+  const SECRET_FIELD: Partial<Record<ResourceKind, string>> = {
+    http: "apiKey",
+    oauth: "clientSecret",
+    aws: "secretAccessKey",
+    "google-sa": "serviceAccountJson",
+    apns: "privateKey",
+  };
+  const host = (u: unknown) => {
+    try {
+      return new URL(String(u)).host;
+    } catch {
+      return "";
+    }
+  };
+  const moved = ["upstreamUrl", "endpoint", "tokenUrl"].some(
+    (k) => k in input && input[k as keyof typeof input] !== undefined && host(config[k]) !== host(current[k]),
+  );
+  if (moved && !secret)
+    throw new AppError("VALIDATION_FAILED", {
+      message: "Changing where the key is sent needs the key again.",
+      details: [
+        {
+          path: SECRET_FIELD[kind] ?? "credentials",
+          message: "Enter the key again to send it to the new address.",
+        },
+      ],
+    });
   if (input.test) {
     const candidate = secret ?? (await readResourceSecret(resourceId));
     // Loaded lazily: resource-test → profile → resource would otherwise be a load-order-dependent cycle.

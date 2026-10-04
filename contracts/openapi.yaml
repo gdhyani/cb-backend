@@ -4415,6 +4415,10 @@ components:
           type: string
           pattern: ^/
           description: Authenticated GET used by the connection test (set by presets, e.g. /v1/balance).
+        basicUser:
+          type: string
+          maxLength: 200
+          description: Basic auth username (public key ID, e.g. Razorpay key_id); the stored key is the password.
         apiKey:
           type: string
           minLength: 1
