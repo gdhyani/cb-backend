@@ -14,6 +14,7 @@ import { type ResourceKind, ResourceModel } from "../models/resource.model.js";
 import { assertRuntimeAccess } from "../services/access.service.js";
 import { recordAudit } from "../services/audit.service.js";
 import { loadOrgCa } from "../services/org-ca.service.js";
+import { DEFAULT_PROFILE, readProfileSecret, resolveProfile } from "../services/profile.service.js";
 import { readResourceSecret } from "../services/resource.service.js";
 import { eventConcerns, revalidate } from "../services/runtime-access.service.js";
 import { createApnsHandler } from "./http/apns-adapter.js";
@@ -160,6 +161,15 @@ async function handleTunnel(
     return;
   }
 
+  const profile = await resolveProfile(auth.userId, env._id.toHexString(), resource._id.toHexString());
+  const secret =
+    profile === DEFAULT_PROFILE
+      ? await readResourceSecret(resource._id)
+      : await readProfileSecret(resource._id, profile);
+  if (secret === undefined) {
+    ws.close(CloseCode.Forbidden, closeReason(`credential profile "${profile}" no longer exists`));
+    return;
+  }
   const ctx: TunnelContext = {
     id: randomUUID(),
     layer: params.layer === "1" ? 1 : 2,
@@ -174,7 +184,8 @@ async function handleTunnel(
       name: resource.name,
       config: (resource.config as Record<string, unknown>) ?? {},
     },
-    secret: await readResourceSecret(resource._id),
+    secret,
+    profile,
     host: params.layer === "2" ? params.host : undefined,
     port: params.layer === "2" ? params.port : undefined,
   };
@@ -197,7 +208,7 @@ async function handleTunnel(
   void recordAudit({
     ...audit,
     action: "tunnel.opened",
-    meta: { layer: ctx.layer, kind: resource.kind, host: ctx.host },
+    meta: { layer: ctx.layer, kind: resource.kind, host: ctx.host, profile },
   });
   logger.info(
     `tunnel ${ctx.id.slice(0, 8)} opened ${resource.kind}:${resource.name} layer=${ctx.layer} user=${auth.userId}`,

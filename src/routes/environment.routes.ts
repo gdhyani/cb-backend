@@ -11,9 +11,14 @@ import {
   updateEnvironmentHandler,
 } from "../controllers/environment.controller.js";
 import {
+  createProfileHandler,
+  deleteProfileHandler,
   deleteResourceHandler,
   deleteVariableHandler,
+  listProfilesHandler,
   revokeGrantHandler,
+  rotateProfileHandler,
+  updateGrantHandler,
   updateResourceHandler,
   updateVariableHandler,
 } from "../controllers/item.controller.js";
@@ -34,6 +39,11 @@ environmentRoutes.get("/environments/:envId/preview", previewHandler);
 environmentRoutes.post("/environments/:envId/grants", createGrantHandler);
 environmentRoutes.patch("/resources/:resourceId", updateResourceHandler);
 environmentRoutes.delete("/resources/:resourceId", deleteResourceHandler);
+environmentRoutes.get("/resources/:resourceId/profiles", listProfilesHandler);
+environmentRoutes.post("/resources/:resourceId/profiles", createProfileHandler);
+environmentRoutes.put("/resources/:resourceId/profiles/:name", rotateProfileHandler);
+environmentRoutes.delete("/resources/:resourceId/profiles/:name", deleteProfileHandler);
 environmentRoutes.patch("/variables/:variableId", updateVariableHandler);
 environmentRoutes.delete("/variables/:variableId", deleteVariableHandler);
+environmentRoutes.patch("/grants/:grantId", updateGrantHandler);
 environmentRoutes.delete("/grants/:grantId", revokeGrantHandler);

@@ -105,7 +105,7 @@ describe.skipIf(!PASSWORD)("SQL, SMTP and AWS adapters through tunnels (§10.8)"
     );
     const envOf = (kind: string) =>
       boot.body.data.listeners.find((l: { kind: string }) => l.kind === kind).env as Record<string, string>;
-    return { token, envId, ids: { ...ids, ...awsIds }, boot, envOf };
+    return { token, envId, ids: { ...ids, ...awsIds }, boot, envOf, owner, bob };
   }
 
   const fill = (template: string, port: number) => template.replaceAll("{port}", String(port));
@@ -217,5 +217,68 @@ describe.skipIf(!PASSWORD)("SQL, SMTP and AWS adapters through tunnels (§10.8)"
     const forged = client("AKIACBAAAAAAAAAAAAAA", plain.AWS_SECRET_ACCESS_KEY ?? "");
     await expect(forged.send(new GetObjectCommand({ Bucket, Key: "a.txt" }))).rejects.toThrow();
     listener.close();
+  });
+
+  it("J2/J4 credential profiles: a readonly grant can read but not write; switching it back reconnects on default", async () => {
+    const { token, envId, ids, envOf, owner, bob } = await scenario();
+    // A read-only Postgres role, created with the admin connection (test setup only).
+    const admin = new pg.Client({ connectionString: PG_URI });
+    await admin.connect();
+    await admin.query("CREATE TABLE IF NOT EXISTS cb_orders (id serial primary key, sku text)");
+    await admin.query(
+      `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'cb_reader') THEN CREATE ROLE cb_reader LOGIN; END IF; END $$`,
+    );
+    await admin.query(`ALTER ROLE cb_reader PASSWORD '${(PASSWORD ?? "").replaceAll("'", "''")}'`);
+    await admin.query("GRANT SELECT ON cb_orders TO cb_reader");
+    await admin.end();
+
+    const created = await owner.post(`/api/resources/${ids.pg}/profiles`, {
+      name: "readonly",
+      connectionUri: `postgresql://cb_reader:${enc}@127.0.0.1:5433/shop`,
+    });
+    expect(created.status).toBe(201);
+    const listed = await owner.get(`/api/resources/${ids.pg}/profiles`);
+    expect(listed.body.data.map((p: { name: string }) => p.name)).toEqual(["default", "readonly"]);
+    expect(JSON.stringify(listed.body)).not.toContain(PASSWORD);
+    expect(
+      (await owner.post(`/api/resources/${ids.pg}/profiles`, { name: "default", connectionUri: PG_URI }))
+        .status,
+    ).toBe(400);
+
+    const matrix = await owner.get(
+      `/api/projects/${(await owner.get(`/api/environments/${envId}`)).body.data.projectId}/access`,
+    );
+    const grant = matrix.body.data.grants.find((g: { userId: string }) => g.userId === bob.userId);
+    const missing = await owner.patch(`/api/grants/${grant.id}`, {
+      resourceProfiles: [{ resourceId: ids.pg, profile: "nope" }],
+    });
+    expect(missing.status).toBe(400);
+    const assigned = await owner.patch(`/api/grants/${grant.id}`, {
+      resourceProfiles: [{ resourceId: ids.pg, profile: "readonly" }],
+    });
+    expect(assigned.body.data.resourceProfiles).toEqual([{ resourceId: ids.pg, profile: "readonly" }]);
+    expect((await owner.delete(`/api/resources/${ids.pg}/profiles/readonly`)).status).toBe(409);
+
+    const listener = await localListener(base, token, { layer: "1", env: envId, resource: ids.pg });
+    const url = fill(envOf("postgres").DATABASE_URL ?? "", listener.port);
+    const reader = new pg.Client({ connectionString: url });
+    await reader.connect();
+    expect((await reader.query("SELECT current_user AS u")).rows[0].u).toBe("cb_reader");
+    await reader.query("SELECT count(*) FROM cb_orders");
+    await expect(reader.query("INSERT INTO cb_orders (sku) VALUES ('nope')")).rejects.toThrow(
+      /permission denied/,
+    );
+
+    // Back to default: the live readonly session is cut, the next connection writes as the admin user.
+    const ended = new Promise((r) => reader.once("error", r).once("end", r));
+    await owner.patch(`/api/grants/${grant.id}`, { resourceProfiles: [] });
+    await ended;
+    const writer = new pg.Client({ connectionString: url });
+    await writer.connect();
+    expect((await writer.query("SELECT current_user AS u")).rows[0].u).toBe("shop_admin");
+    await writer.query("INSERT INTO cb_orders (sku) VALUES ('ok')");
+    await writer.end();
+    listener.close();
+    expect((await owner.delete(`/api/resources/${ids.pg}/profiles/readonly`)).status).toBe(200);
   });
 });

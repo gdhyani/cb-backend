@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getEnv } from "../config/env.js";
 import { decryptSecret, encryptSecret } from "../crypto/envelope.js";
 import { AppError } from "../errors/app-error.js";
+import { CredentialProfileModel } from "../models/credential-profile.model.js";
 import { type ResourceKind, ResourceModel } from "../models/resource.model.js";
 import { VariableModel } from "../models/variable.model.js";
 import {
@@ -183,7 +184,7 @@ function toDto(r: {
 }
 
 /** Splits create/update input into non-secret config and the secret to encrypt. */
-function configAndSecret(
+export function configAndSecret(
   kind: ResourceKind,
   input: Record<string, unknown>,
   current: Record<string, unknown> = {},
@@ -373,6 +374,7 @@ export async function updateResource(
 export async function deleteResource(actorId: string, resourceId: Types.ObjectId): Promise<void> {
   const resource = await loadResource(actorId, resourceId, "admin");
   await VariableModel.deleteMany({ resourceId });
+  await CredentialProfileModel.deleteMany({ resourceId });
   await ResourceModel.deleteOne({ _id: resourceId });
   await touchEnvironment(resource.environmentId);
   await recordAudit({

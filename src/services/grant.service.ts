@@ -10,9 +10,15 @@ import { UserModel } from "../models/user.model.js";
 import { activeGrantFilter, loadEnvironment, loadProject, requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { listMembers, type MemberDto } from "./org.service.js";
+import { announceProfileChange, assertProfilesExist, DEFAULT_PROFILE } from "./profile.service.js";
+
+const ResourceProfiles = z
+  .array(z.object({ resourceId: z.string().regex(/^[a-f0-9]{24}$/), profile: z.string().min(1).max(30) }))
+  .max(50);
 
 export const CreateGrantBody = z.object({
   userId: z.string(),
+  resourceProfiles: ResourceProfiles.optional(),
   expiresAt: z.iso
     .datetime()
     .refine((v) => new Date(v).getTime() > Date.now(), "must be in the future")
@@ -20,8 +26,12 @@ export const CreateGrantBody = z.object({
     .optional(),
 });
 
+export const UpdateGrantBody = z.object({ resourceProfiles: ResourceProfiles });
+
 export interface GrantDto {
   id: string;
+  /** Resources not listed use the "default" profile. */
+  resourceProfiles: { resourceId: string; profile: string }[];
   environmentId: string;
   userId: string;
   expiresAt: string | null;
@@ -42,8 +52,12 @@ const toDto = (g: {
   expiresAt?: Date | null;
   createdAt?: Date;
   createdBy: Types.ObjectId;
+  resourceProfiles?: { resourceId?: Types.ObjectId | null; profile?: string | null }[] | null;
 }): GrantDto => ({
   id: g._id.toHexString(),
+  resourceProfiles: (g.resourceProfiles ?? [])
+    .filter((p) => p.resourceId && p.profile)
+    .map((p) => ({ resourceId: String(p.resourceId), profile: String(p.profile) })),
   environmentId: g.environmentId.toHexString(),
   userId: g.userId.toHexString(),
   expiresAt: g.expiresAt?.toISOString() ?? null,
@@ -79,22 +93,30 @@ export async function createGrant(
     });
   }
   const expiresAt = input.expiresAt ? new Date(input.expiresAt) : null;
+  const resourceProfiles = normalizeProfiles(input.resourceProfiles);
+  if (resourceProfiles) await assertProfilesExist(envId, resourceProfiles);
   const existing = await GrantModel.findOne({
     environmentId: envId,
     userId: input.userId,
     ...activeGrantFilter(),
   });
   const grant = existing
-    ? Object.assign(existing, { expiresAt, expiryNotifiedAt: null })
+    ? Object.assign(
+        existing,
+        { expiresAt, expiryNotifiedAt: null },
+        resourceProfiles ? { resourceProfiles } : {},
+      )
     : new GrantModel({
         orgId: env.orgId,
         projectId: env.projectId,
         environmentId: envId,
         userId: input.userId,
         expiresAt,
+        resourceProfiles: resourceProfiles ?? [],
         createdBy: actorId,
       });
   await grant.save();
+  if (existing && resourceProfiles) announceProfileChange(envId.toHexString(), input.userId);
   bus.publish({ type: "config.changed", environmentId: envId.toHexString() });
   const user = await UserModel.findById(input.userId).lean();
   await recordAudit({
@@ -105,6 +127,42 @@ export async function createGrant(
     action: "grant.created",
     target: user?.email ?? input.userId,
     meta: { expiresAt },
+  });
+  return toDto(grant);
+}
+
+/** Drops "default" entries (the implicit choice) and duplicate resources (last wins). */
+function normalizeProfiles(list: { resourceId: string; profile: string }[] | undefined) {
+  if (!list) return undefined;
+  const byResource = new Map(list.map((p) => [p.resourceId, p.profile] as const));
+  return [...byResource]
+    .filter(([, profile]) => profile !== DEFAULT_PROFILE)
+    .map(([resourceId, profile]) => ({ resourceId, profile }));
+}
+
+/** J4: change which credential profile a grant uses per resource; live tunnels reconnect on the new one. */
+export async function updateGrant(
+  actorId: string,
+  grantId: Types.ObjectId,
+  input: z.infer<typeof UpdateGrantBody>,
+): Promise<GrantDto> {
+  const grant = await GrantModel.findById(grantId);
+  if (!grant || grant.revokedAt) throw new AppError("NOT_FOUND", { message: "Grant not found." });
+  await requireMembership(actorId, grant.orgId, "admin");
+  const resourceProfiles = normalizeProfiles(input.resourceProfiles) ?? [];
+  await assertProfilesExist(grant.environmentId, resourceProfiles);
+  grant.set("resourceProfiles", resourceProfiles);
+  await grant.save();
+  announceProfileChange(grant.environmentId.toHexString(), grant.userId.toHexString());
+  const user = await UserModel.findById(grant.userId).lean();
+  await recordAudit({
+    orgId: grant.orgId,
+    actorId,
+    projectId: grant.projectId,
+    environmentId: grant.environmentId,
+    action: "grant.updated",
+    target: user?.email ?? grant.userId.toHexString(),
+    meta: { resourceProfiles },
   });
   return toDto(grant);
 }

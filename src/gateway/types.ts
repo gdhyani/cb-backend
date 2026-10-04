@@ -12,6 +12,8 @@ export interface TunnelContext {
   resource: { id: string; kind: ResourceKind; name: string; config: Record<string, unknown> };
   /** Real credential, decrypted for this tunnel only (FR-GW-005). Never logged. */
   secret: string;
+  /** Credential profile the secret came from (J2); a changed assignment closes the tunnel. */
+  profile: string;
   host?: string;
   port?: number;
 }

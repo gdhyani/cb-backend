@@ -3,6 +3,7 @@ import type { BusEvent } from "../events/bus.js";
 import { DeviceModel } from "../models/device.model.js";
 import { EnvironmentModel } from "../models/environment.model.js";
 import { assertRuntimeAccess } from "./access.service.js";
+import { resolveProfile } from "./profile.service.js";
 
 export interface RuntimeSubject {
   userId: string;
@@ -10,6 +11,9 @@ export interface RuntimeSubject {
   environmentId: string;
   projectId: string;
   orgId: string;
+  /** Tunnels only: the resource and the credential profile they were opened with. */
+  resource?: { id: string };
+  profile?: string;
 }
 
 /** Could this access.revoked event concern the subject? (cheap pre-filter before re-checking) */
@@ -43,8 +47,12 @@ export async function revalidate(s: RuntimeSubject): Promise<string | undefined>
   if (!env) return "environment deleted";
   try {
     await assertRuntimeAccess(s.userId, env);
-    return undefined;
   } catch (err) {
     return err instanceof Error ? err.message : "access revoked";
   }
+  if (s.resource && s.profile !== undefined) {
+    const current = await resolveProfile(s.userId, s.environmentId, s.resource.id);
+    if (current !== s.profile) return "credential profile changed";
+  }
+  return undefined;
 }

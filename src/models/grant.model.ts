@@ -7,6 +7,11 @@ const GrantSchema = new Schema(
     environmentId: { type: Schema.Types.ObjectId, ref: "Environment", required: true, index: true },
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     expiresAt: { type: Date, default: null },
+    /** Per-resource credential profile; resources not listed use "default". */
+    resourceProfiles: {
+      type: [{ _id: false, resourceId: { type: Schema.Types.ObjectId, ref: "Resource" }, profile: String }],
+      default: [],
+    },
     createdBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
     revokedAt: { type: Date, default: null },
     revokedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },

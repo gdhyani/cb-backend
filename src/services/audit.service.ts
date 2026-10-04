@@ -37,7 +37,7 @@ export type AuditCategory = (typeof AUDIT_CATEGORIES)[number];
 const CATEGORY_PATTERNS: Record<AuditCategory, RegExp> = {
   team: /^(org|member)\./,
   access: /^(grant\.|environment\.(killed|revived))/,
-  config: /^(project\.|resource\.|variable\.|environment\.(created|renamed|deleted))/,
+  config: /^(project\.|resource\.|profile\.|variable\.|environment\.(created|renamed|deleted))/,
   security: /^device\./,
   runtime: /^(agent|tunnel|http)\./,
 };
