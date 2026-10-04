@@ -61,42 +61,87 @@ async function membersSecondaryFirst(): Promise<string[]> {
     .map((m) => m.name);
 }
 
+/** Adds a MongoDB resource + variable, logs Bob's device in, opens a listener and returns a connected client. */
+async function throughGateway(connectionUri: string) {
+  const app = server.listeners("request")[0] as never;
+  const { owner, orgId } = await signupOwner(app);
+  const project = await owner.post(`/api/orgs/${orgId}/projects`, { name: "Shop" });
+  const envId = project.body.data.environments[0].id as string;
+  const r = await owner.post(`/api/environments/${envId}/resources`, {
+    kind: "mongodb",
+    name: "replset",
+    connectionUri,
+  });
+  expect(r.status, JSON.stringify(r.body)).toBe(201);
+  await owner.post(`/api/environments/${envId}/variables`, {
+    type: "brokered",
+    key: "MONGODB_URI",
+    resourceId: r.body.data.id,
+    field: "url",
+  });
+  const bob = await addMember(app, owner, orgId, "Bob");
+  await owner.post(`/api/environments/${envId}/grants`, { userId: bob.userId });
+  const { token } = await loginDevice(app, bob.member);
+  const boot = await cli(app, token).get(
+    `/api/agent/bootstrap?projectId=${project.body.data.id}&env=development`,
+  );
+  const url = boot.body.data.listeners.find((l: { kind: string }) => l.kind === "mongodb").env
+    .MONGODB_URI as string;
+  const listener = await localListener(base, token, { layer: "1", env: envId, resource: r.body.data.id });
+  const client = new MongoClient(url.replace("{port}", String(listener.port)), {
+    serverSelectionTimeoutMS: 8000,
+  });
+  return {
+    client,
+    close: async () => {
+      await client.close();
+      listener.close();
+    },
+  };
+}
+
+async function createUser(user: string, pwd: string, mechanisms: string[]) {
+  const admin = new MongoClient(
+    rs.getUri().replace("mongodb://", `mongodb://root:${PW}@`).replace("?", "?authSource=admin&"),
+  );
+  await admin.connect();
+  await admin
+    .db("admin")
+    .command({ dropUser: user })
+    .catch(() => undefined);
+  await admin
+    .db("admin")
+    .command({ createUser: user, pwd, roles: [{ role: "readWrite", db: "shop" }], mechanisms });
+  await admin.close();
+}
+
 describe("MongoDB replica sets through the gateway (§10.8: primary discovery)", () => {
   it("T4 a multi-host URI listing the secondary first still writes: the gateway connects to the primary", async () => {
-    const app = server.listeners("request")[0] as never;
-    const { owner, orgId } = await signupOwner(app);
-    const project = await owner.post(`/api/orgs/${orgId}/projects`, { name: "Shop" });
-    const envId = project.body.data.environments[0].id as string;
     const hosts = (await membersSecondaryFirst()).join(",");
-    const r = await owner.post(`/api/environments/${envId}/resources`, {
-      kind: "mongodb",
-      name: "replset",
-      connectionUri: `mongodb://root:${PW}@${hosts}/shop?authSource=admin&replicaSet=${rs.replSetOpts.name}`,
-    });
-    expect(r.status, JSON.stringify(r.body)).toBe(201);
-    await owner.post(`/api/environments/${envId}/variables`, {
-      type: "brokered",
-      key: "MONGODB_URI",
-      resourceId: r.body.data.id,
-      field: "url",
-    });
-    const bob = await addMember(app, owner, orgId, "Bob");
-    await owner.post(`/api/environments/${envId}/grants`, { userId: bob.userId });
-    const { token } = await loginDevice(app, bob.member);
-    const boot = await cli(app, token).get(
-      `/api/agent/bootstrap?projectId=${project.body.data.id}&env=development`,
+    const { client, close } = await throughGateway(
+      `mongodb://root:${PW}@${hosts}/shop?authSource=admin&replicaSet=${rs.replSetOpts.name}`,
     );
-    const url = boot.body.data.listeners.find((l: { kind: string }) => l.kind === "mongodb").env
-      .MONGODB_URI as string;
-    const listener = await localListener(base, token, { layer: "1", env: envId, resource: r.body.data.id });
-    const client = new MongoClient(url.replace("{port}", String(listener.port)), {
-      serverSelectionTimeoutMS: 8000,
-    });
     await client.connect();
     const coll = client.db("shop").collection("orders");
     await coll.insertOne({ sku: "RS1" }); // writes fail on a secondary (NotWritablePrimary)
     expect(await coll.findOne({ sku: "RS1" })).toMatchObject({ sku: "RS1" });
-    await client.close();
-    listener.close();
+    await close();
+  });
+
+  it.each([
+    ["SCRAM-SHA-1", "legacy_sha1"], // MongoDB Atlas users often advertise only SCRAM-SHA-1
+    ["SCRAM-SHA-256", "modern_sha256"],
+  ])("T4 the gateway negotiates the upstream mechanism: a %s-only user logs in", async (mechanism, user) => {
+    const pwd = "Pa:ss@w/rd%1";
+    await createUser(user, pwd, [mechanism]);
+    const hosts = (await membersSecondaryFirst()).join(",");
+    const { client, close } = await throughGateway(
+      `mongodb://${user}:${encodeURIComponent(pwd)}@${hosts}/shop?authSource=admin&replicaSet=${rs.replSetOpts.name}`,
+    );
+    await client.connect();
+    const coll = client.db("shop").collection("mech");
+    await coll.insertOne({ via: mechanism });
+    expect(await coll.findOne({ via: mechanism })).toMatchObject({ via: mechanism });
+    await close();
   });
 });

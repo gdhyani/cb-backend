@@ -7,11 +7,11 @@ import type { AdapterHooks, StreamAdapter } from "../types.js";
 import { runAuthGate } from "./auth-gate.js";
 import { connectPrimary, seedList } from "./discovery.js";
 import { encodeOpMsg } from "./op-msg.js";
-import { authenticateScramSha256 } from "./scram.js";
+import { authenticateScram, negotiateMechanism } from "./scram.js";
 
 /**
  * §10.8 mongodb: the gateway finds the primary (single host, replica-set list or mongodb+srv), authenticates with
- * the real credential (SCRAM-SHA-256); the app authenticates to the gateway with its device's fake credential (S7),
+ * the real credential (SCRAM-SHA-256, or SCRAM-SHA-1 when that is all the user has); the app authenticates to the gateway with its device's fake credential (S7),
  * then pipes.
  */
 export const mongodbAdapter: StreamAdapter = async (client, ctx, hooks) => {
@@ -27,7 +27,8 @@ export const mongodbAdapter: StreamAdapter = async (client, ctx, hooks) => {
   upstream.on("error", () => client.destroy());
   if (real.username) {
     const authSource = seeds.params.get("authSource") ?? (real.database || "admin");
-    await authenticateScramSha256(upstream, real.username, real.password ?? "", authSource);
+    const mechanism = await negotiateMechanism(upstream, real.username, authSource);
+    await authenticateScram(upstream, real.username, real.password ?? "", authSource, mechanism);
   }
   const material = fakeScramMaterial({
     deviceId: ctx.deviceId,
