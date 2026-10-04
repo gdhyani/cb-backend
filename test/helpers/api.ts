@@ -16,6 +16,11 @@ export function browser(app: Express) {
         .patch(url)
         .set("x-cb-csrf", "1")
         .send(body ?? {}),
+    put: (url: string, body?: object) =>
+      agent
+        .put(url)
+        .set("x-cb-csrf", "1")
+        .send(body ?? {}),
     delete: (url: string) => agent.delete(url).set("x-cb-csrf", "1"),
     raw: agent,
   };

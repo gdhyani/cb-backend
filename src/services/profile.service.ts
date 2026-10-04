@@ -3,11 +3,11 @@ import { z } from "zod";
 import { getEnv } from "../config/env.js";
 import { decryptSecret, encryptSecret } from "../crypto/envelope.js";
 import { AppError } from "../errors/app-error.js";
-import { bus } from "../events/bus.js";
 import { CredentialProfileModel } from "../models/credential-profile.model.js";
+import { EnvironmentModel } from "../models/environment.model.js";
 import { GrantModel } from "../models/grant.model.js";
 import { type ResourceKind, ResourceModel } from "../models/resource.model.js";
-import { activeGrantFilter, requireMembership } from "./access.service.js";
+import { activeGrantFilter, coveringGrantFilter, requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { configAndSecret, UpdateResourceBody } from "./resource.service.js";
 
@@ -129,9 +129,8 @@ export async function deleteProfile(
 ): Promise<void> {
   const resource = await loadResource(actorId, resourceId, "admin");
   const inUse = await GrantModel.countDocuments({
-    environmentId: resource.environmentId,
-    "resourceProfiles.resourceId": resourceId,
-    "resourceProfiles.profile": name,
+    projectId: resource.projectId,
+    resourceProfiles: { $elemMatch: { resourceId, profile: name } },
     ...activeGrantFilter(),
   });
   if (inUse)
@@ -153,15 +152,19 @@ export async function deleteProfile(
 
 /** Rejects profile assignments that point at another environment's resource or a missing profile. */
 export async function assertProfilesExist(
-  environmentId: Types.ObjectId,
+  /** Environment grants pick from that environment's resources; project grants from any in the project. */
+  target: { environmentId?: Types.ObjectId } | { projectId: Types.ObjectId },
   assignments: { resourceId: string; profile: string }[],
 ): Promise<void> {
   for (const { resourceId, profile } of assignments) {
-    const resource = await ResourceModel.exists({ _id: resourceId, environmentId });
+    const resource = await ResourceModel.exists({ _id: resourceId, ...target });
     if (!resource)
       throw new AppError("VALIDATION_FAILED", {
         details: [
-          { path: "resourceProfiles", message: `Resource ${resourceId} is not in this environment.` },
+          {
+            path: "resourceProfiles",
+            message: `Resource ${resourceId} is not in this ${"projectId" in target ? "project" : "environment"}.`,
+          },
         ],
       });
     if (profile !== DEFAULT_PROFILE && !(await CredentialProfileModel.exists({ resourceId, name: profile })))
@@ -179,11 +182,16 @@ export async function resolveProfile(
   environmentId: string,
   resourceId: string,
 ): Promise<string> {
-  const grant = await GrantModel.findOne({ environmentId, userId, ...activeGrantFilter() }).lean();
-  return (
-    grant?.resourceProfiles?.find((p) => p.resourceId?.toHexString() === resourceId)?.profile ??
-    DEFAULT_PROFILE
-  );
+  // An environment grant's choice wins over a project-wide grant's.
+  const env = await EnvironmentModel.findById(environmentId).select("projectId").lean();
+  if (!env) return DEFAULT_PROFILE;
+  const grants = await GrantModel.find({ userId, ...coveringGrantFilter(env) }).lean();
+  const pick = (scope: "environment" | "project") =>
+    grants
+      .filter((g) => (g.scope === "project" ? "project" : "environment") === scope)
+      .flatMap((g) => g.resourceProfiles ?? [])
+      .find((p) => p.resourceId?.toHexString() === resourceId)?.profile;
+  return pick("environment") ?? pick("project") ?? DEFAULT_PROFILE;
 }
 
 /** Gateway-only (FR-GW-005): the real credential for one profile. Never returned by any API. */
@@ -193,16 +201,4 @@ export async function readProfileSecret(
 ): Promise<string | undefined> {
   const doc = await CredentialProfileModel.findOne({ resourceId, name }).select("+credentials").lean();
   return doc ? decryptSecret(masterKey(), doc.credentials) : undefined;
-}
-
-/** Tunnels reconnect so a changed assignment takes effect immediately. */
-export function announceProfileChange(environmentId: string, userId: string): void {
-  bus.publish({
-    type: "access.revoked",
-    scope: "grant",
-    environmentId,
-    userId,
-    reason: "credential profile changed",
-  });
-  bus.publish({ type: "config.changed", environmentId });
 }

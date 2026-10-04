@@ -4,6 +4,7 @@ import { authOf } from "../middlewares/auth.middleware.js";
 import { requireMembership } from "../services/access.service.js";
 import * as auditService from "../services/audit.service.js";
 import * as deviceService from "../services/device.service.js";
+import * as grantService from "../services/grant.service.js";
 import * as inviteService from "../services/invite.service.js";
 import * as orgService from "../services/org.service.js";
 import * as statsService from "../services/stats.service.js";
@@ -120,5 +121,14 @@ export async function getOrgStatsHandler(req: Request, res: Response, next: Next
     sendSuccess(res, await statsService.getOrgStats(authOf(res).userId, orgIdOf(req)));
   } catch (err) {
     next(toAppError(err, "org.controller.getOrgStats: failed to load organization stats"));
+  }
+}
+
+export async function getMemberAccessHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const userId = toObjectId(req.params.userId, "Member").toHexString();
+    sendSuccess(res, await grantService.listMemberAccess(authOf(res).userId, orgIdOf(req), userId));
+  } catch (err) {
+    next(toAppError(err, "org.controller.getMemberAccess: failed to load member access"));
   }
 }

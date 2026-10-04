@@ -39,21 +39,34 @@ export function activeGrantFilter(now = new Date()) {
   return { revokedAt: null, $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }] };
 }
 
-/** M0-D1: owners/admins have implicit access; developers need an active grant on the environment. */
+/** Active grants that give access to this environment: its own grants or a project-wide grant. */
+export function coveringGrantFilter(
+  env: { _id: Types.ObjectId; projectId: Types.ObjectId },
+  now = new Date(),
+): Record<string, unknown> {
+  return {
+    $and: [
+      activeGrantFilter(now),
+      { $or: [{ environmentId: env._id }, { scope: "project", projectId: env.projectId }] },
+    ],
+  };
+}
+
+/** M0-D1: owners/admins have implicit access; developers need an environment or project grant. */
 export async function hasEnvironmentAccess(
   userId: string,
-  env: { _id: Types.ObjectId; orgId: Types.ObjectId },
+  env: { _id: Types.ObjectId; orgId: Types.ObjectId; projectId: Types.ObjectId },
 ) {
   const membership = await MembershipModel.findOne({ orgId: env.orgId, userId }).lean();
   if (!membership) return false;
   if (isAdminRole(membership.role as Role)) return true;
-  return Boolean(await GrantModel.exists({ environmentId: env._id, userId, ...activeGrantFilter() }));
+  return Boolean(await GrantModel.exists({ userId, ...coveringGrantFilter(env) }));
 }
 
 /** Runtime check for bootstrap and tunnels: membership, kill switch, then access. */
 export async function assertRuntimeAccess(
   userId: string,
-  env: { _id: Types.ObjectId; orgId: Types.ObjectId; killedAt?: Date | null },
+  env: { _id: Types.ObjectId; orgId: Types.ObjectId; projectId: Types.ObjectId; killedAt?: Date | null },
 ) {
   if (env.killedAt) throw new AppError("ENVIRONMENT_KILLED");
   if (!(await hasEnvironmentAccess(userId, env))) throw new AppError("NO_ACCESS");

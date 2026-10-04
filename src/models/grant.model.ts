@@ -4,7 +4,10 @@ const GrantSchema = new Schema(
   {
     orgId: { type: Schema.Types.ObjectId, ref: "Organization", required: true, index: true },
     projectId: { type: Schema.Types.ObjectId, ref: "Project", required: true, index: true },
-    environmentId: { type: Schema.Types.ObjectId, ref: "Environment", required: true, index: true },
+    /** "project" grants cover every environment in the project, including ones created later. */
+    scope: { type: String, enum: ["environment", "project"], default: "environment" },
+    /** Set for environment grants; null for project grants. */
+    environmentId: { type: Schema.Types.ObjectId, ref: "Environment", default: null, index: true },
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     expiresAt: { type: Date, default: null },
     /** Per-resource credential profile; resources not listed use "default". */

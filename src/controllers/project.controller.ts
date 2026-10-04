@@ -111,3 +111,34 @@ export async function getAccessHandler(req: Request, res: Response, next: NextFu
     next(toAppError(err, "project.controller.getAccess: failed to load access matrix"));
   }
 }
+
+export async function setProjectAccessHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const input = grantService.SetProjectAccessBody.parse(req.body);
+    const userId = toObjectId(req.params.userId, "Member").toHexString();
+    sendSuccess(
+      res,
+      await grantService.setProjectAccess(authOf(res).userId, projectIdOf(req), userId, input),
+    );
+  } catch (err) {
+    next(toAppError(err, "project.controller.setProjectAccess: failed to set project access"));
+  }
+}
+
+export async function removeProjectAccessHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const userId = toObjectId(req.params.userId, "Member").toHexString();
+    const revoked = await grantService.removeProjectAccess(authOf(res).userId, projectIdOf(req), userId);
+    sendSuccess(res, { revoked });
+  } catch (err) {
+    next(toAppError(err, "project.controller.removeProjectAccess: failed to remove project access"));
+  }
+}
