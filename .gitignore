@@ -17,3 +17,6 @@ coverage/
 !.env.example
 .DS_Store
 *.log
+
+# Throwaway TLS test certificates (scripts/test-certs.sh)
+test-certs/

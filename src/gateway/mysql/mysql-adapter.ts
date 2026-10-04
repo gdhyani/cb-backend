@@ -1,9 +1,11 @@
 import { constants, publicEncrypt } from "node:crypto";
 import net from "node:net";
 import type { Duplex } from "node:stream";
+import tls from "node:tls";
 import { safeEqual } from "../../crypto/safe-equal.js";
 import { fakeDbCredentials } from "../../services/fakes.service.js";
-import { parseMysqlUri } from "../../utils/connection-uri.js";
+import { MYSQL_TLS_HINT, mysqlWantsTls, parseMysqlUri } from "../../utils/connection-uri.js";
+import { upstreamCa } from "../http/upstream.js";
 import { mysqlFramer, REVOKED_TEXT, relayWithRevocation } from "../revoke-relay.js";
 import { connected } from "../stream-io.js";
 import { type StreamAdapter, UpstreamError } from "../types.js";
@@ -32,6 +34,7 @@ async function authenticateUpstream(
   password: string,
   scramble: Buffer,
   plugin: string,
+  secure: boolean,
 ): Promise<Buffer> {
   let currentScramble = scramble;
   let currentPlugin = plugin;
@@ -39,10 +42,16 @@ async function authenticateUpstream(
     const { seq, payload } = await readPacket(upstream);
     const marker = payload[0];
     if (marker === 0x00) return payload;
-    if (marker === 0xff)
+    if (marker === 0xff) {
+      const code = payload.readUInt16LE(1);
+      const text = payload.subarray(9).toString("utf8");
+      // 3159 = ER_SECURE_TRANSPORT_REQUIRED: not a credential problem.
       throw new UpstreamError(
-        `mysql rejected the stored credentials (${payload.subarray(9).toString("utf8")})`,
+        code === 3159
+          ? `mysql refused a plain connection (${MYSQL_TLS_HINT})`
+          : `mysql rejected the stored credentials (${text})`,
       );
+    }
     if (marker === 0xfe) {
       // AuthSwitchRequest: plugin name, then a fresh scramble.
       const end = payload.indexOf(0, 1);
@@ -52,6 +61,11 @@ async function authenticateUpstream(
       continue;
     }
     if (marker === 0x01 && payload[1] === 0x03) continue; // caching_sha2 fast auth succeeded; OK follows
+    if (marker === 0x01 && payload[1] === 0x04 && secure) {
+      // Full authentication over TLS: the password goes over the encrypted channel.
+      writePacket(upstream, seq + 1, Buffer.from(`${password}\0`));
+      continue;
+    }
     if (marker === 0x01 && payload[1] === 0x04) {
       // Full authentication without TLS: fetch the server's RSA public key and send the password encrypted.
       writePacket(upstream, seq + 1, Buffer.from([0x02]));
@@ -79,9 +93,15 @@ export const mysqlAdapter: StreamAdapter = async (client: Duplex, ctx, hooks) =>
   const upstream = net.connect({ host: real.host, port: real.port });
   upstream.pause();
   await connected(upstream, "connect", `mysql ${real.host}:${real.port}`);
+  // While the upstream socket is handed to TLS, its own close must not cut the app off before it hears why.
+  let upgrading = false;
   client.on("close", () => upstream.destroy());
-  upstream.on("close", () => client.destroy());
-  upstream.on("error", () => client.destroy());
+  upstream.on("close", () => {
+    if (!upgrading) client.destroy();
+  });
+  upstream.on("error", () => {
+    if (!upgrading) client.destroy();
+  });
 
   const greeting = parseGreeting((await readPacket(upstream)).payload);
   const ourScramble = newScramble();
@@ -122,15 +142,55 @@ export const mysqlAdapter: StreamAdapter = async (client: Duplex, ctx, hooks) =>
     return;
   }
 
+  const useTls = mysqlWantsTls(real.params);
   const capabilities =
     (hs.capabilities & greeting.capabilities & ~CAP.SSL & ~CAP.CONNECT_ATTRS) |
     CAP.PLUGIN_AUTH |
     CAP.SECURE_CONNECTION |
-    CAP.PROTOCOL_41;
+    CAP.PROTOCOL_41 |
+    (useTls ? CAP.SSL : 0);
   const database = hs.database ?? (real.database || undefined);
+  // FR-GW-004: when the stored URI asks for TLS, upgrade with an SSLRequest and always verify the certificate.
+  let link: Duplex = upstream;
+  let seq = 1;
+  if (useTls) {
+    if (!(greeting.capabilities & CAP.SSL)) {
+      client.end(packet(clientSeq + 1, errPacket(2026, "HY000", "cb: the database does not offer TLS")));
+      throw new UpstreamError(
+        `mysql ${real.host}:${real.port} does not offer TLS, but the connection URI requires it`,
+      );
+    }
+    const sslRequest = Buffer.alloc(32);
+    sslRequest.writeUInt32LE((capabilities | CAP.SSL) >>> 0, 0);
+    sslRequest.writeUInt32LE(hs.maxPacket, 4);
+    sslRequest[8] = hs.charset;
+    writePacket(upstream, 1, sslRequest);
+    upgrading = true;
+    const secure = tls.connect({
+      socket: upstream as net.Socket,
+      servername: net.isIP(real.host) ? undefined : real.host,
+      ca: upstreamCa(),
+    });
+    try {
+      await connected(secure, "secureConnect", `mysql ${real.host}:${real.port} (tls)`);
+    } catch (err) {
+      client.end(
+        packet(
+          clientSeq + 1,
+          errPacket(2026, "HY000", "cb: the gateway could not verify the database's TLS certificate"),
+        ),
+      );
+      throw err;
+    }
+    upgrading = false;
+    secure.on("close", () => client.destroy());
+    secure.on("error", () => client.destroy());
+    link = secure;
+    seq = 2;
+  }
   writePacket(
-    upstream,
-    1,
+    link,
+    seq,
     buildHandshakeResponse({
       capabilities: database ? capabilities | CAP.CONNECT_WITH_DB : capabilities & ~CAP.CONNECT_WITH_DB,
       maxPacket: hs.maxPacket,
@@ -143,7 +203,14 @@ export const mysqlAdapter: StreamAdapter = async (client: Duplex, ctx, hooks) =>
   );
   let ok: Buffer;
   try {
-    ok = await authenticateUpstream(upstream, 1, real.password ?? "", greeting.scramble, greeting.plugin);
+    ok = await authenticateUpstream(
+      link,
+      seq,
+      real.password ?? "",
+      greeting.scramble,
+      greeting.plugin,
+      useTls,
+    );
   } catch (err) {
     client.end(
       packet(
@@ -156,7 +223,7 @@ export const mysqlAdapter: StreamAdapter = async (client: Duplex, ctx, hooks) =>
   writePacket(client, clientSeq + 1, ok);
   // FR-GW-007: an ERR packet continuing the current sequence (1927 = connection killed).
   const framer = mysqlFramer();
-  relayWithRevocation(client, upstream, framer, hooks, () =>
+  relayWithRevocation(client, link, framer, hooks, () =>
     packet((framer.lastSeq() + 1) & 0xff, errPacket(1927, "70100", REVOKED_TEXT)),
   );
 };

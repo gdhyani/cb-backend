@@ -39,6 +39,21 @@ services:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -ushop_admin -p\"$$MYSQL_PASSWORD\" --silent"]
       interval: 3s
       retries: 40
+  # TLS-only MySQL (require_secure_transport); certificates from scripts/test-certs.sh.
+  mysql-tls:
+    image: mysql:8.4
+    ports: ["3309:3306"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${CB_TEST_DB_PASSWORD:?set CB_TEST_DB_PASSWORD in your shell}
+      MYSQL_DATABASE: shop
+      MYSQL_USER: shop_admin
+      MYSQL_PASSWORD: ${CB_TEST_DB_PASSWORD:?set CB_TEST_DB_PASSWORD in your shell}
+    volumes: ["./test-certs:/tls:ro"]
+    command: ["--require-secure-transport=ON", "--ssl-ca=/tls/ca.pem", "--ssl-cert=/tls/server.pem", "--ssl-key=/tls/server.key"]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -ushop_admin -p\"$$MYSQL_PASSWORD\" --silent"]
+      interval: 3s
+      retries: 40
   mailpit:
     image: axllent/mailpit:latest
     ports: ["1026:1025", "8026:8025"]

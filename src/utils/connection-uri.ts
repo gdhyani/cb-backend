@@ -66,6 +66,21 @@ export function parseMysqlUri(uri: string, field = "connectionUri"): ParsedConne
   return parse(uri, ["mysql"], 3306, field);
 }
 
+/** MySQL clients spell "use TLS" several ways; any of them makes the gateway use verified TLS upstream (FR-GW-004). */
+export function mysqlWantsTls(params: URLSearchParams): boolean {
+  const v = (key: string) => (params.get(key) ?? "").toLowerCase();
+  return (
+    ["true", "1", "required"].includes(v("ssl")) ||
+    v("ssl").startsWith("{") ||
+    v("tls") === "true" ||
+    ["required", "verify_ca", "verify_identity"].includes(v("ssl-mode")) ||
+    ["required", "verify_ca", "verify_identity", "require", "verify-ca", "verify-full"].includes(v("sslmode"))
+  );
+}
+
+/** Appended to "insecure transport" refusals so admins know the one-line fix. */
+export const MYSQL_TLS_HINT = "the server requires TLS: add ?ssl=true to the connection URI";
+
 export function parseSmtpUri(uri: string, field = "connectionUri"): ParsedConnection {
   return parse(uri, ["smtp", "smtps"], 587, field);
 }
