@@ -1,33 +1,28 @@
-import net from "node:net";
 import { type Duplex, PassThrough } from "node:stream";
-import tls from "node:tls";
 import { fakeScramMaterial } from "../../services/fakes.service.js";
 import { parseMongoUri } from "../../utils/connection-uri.js";
 import { upstreamCa } from "../http/upstream.js";
 import { LengthFramer, REVOKED_TEXT, relayWithRevocation } from "../revoke-relay.js";
-import { connected } from "../stream-io.js";
 import type { AdapterHooks, StreamAdapter } from "../types.js";
 import { runAuthGate } from "./auth-gate.js";
+import { connectPrimary, seedList } from "./discovery.js";
 import { encodeOpMsg } from "./op-msg.js";
 import { authenticateScramSha256 } from "./scram.js";
 
 /**
- * §10.8 mongodb: the gateway opens the upstream connection and authenticates with the real credential
- * (SCRAM-SHA-256); the app authenticates to the gateway with its device's fake credential (S7), then pipes.
+ * §10.8 mongodb: the gateway finds the primary (single host, replica-set list or mongodb+srv), authenticates with
+ * the real credential (SCRAM-SHA-256); the app authenticates to the gateway with its device's fake credential (S7),
+ * then pipes.
  */
 export const mongodbAdapter: StreamAdapter = async (client, ctx, hooks) => {
   const real = parseMongoUri(ctx.secret);
-  const useTls = real.params.get("tls") === "true" || real.params.get("ssl") === "true";
-  const upstream = useTls
-    ? tls.connect({ host: real.host, port: real.port, servername: real.host, ca: upstreamCa() })
-    : net.connect({ host: real.host, port: real.port });
-  upstream.pause();
-  await connected(upstream, useTls ? "secureConnect" : "connect", `mongodb ${real.host}:${real.port}`);
+  const seeds = await seedList(real);
+  const upstream = await connectPrimary(seeds.hosts, seeds.tls, seeds.tls ? upstreamCa() : undefined);
   client.on("close", () => upstream.destroy());
   upstream.on("close", () => client.destroy());
   upstream.on("error", () => client.destroy());
   if (real.username) {
-    const authSource = real.params.get("authSource") ?? (real.database || "admin");
+    const authSource = seeds.params.get("authSource") ?? (real.database || "admin");
     await authenticateScramSha256(upstream, real.username, real.password ?? "", authSource);
   }
   const material = fakeScramMaterial({

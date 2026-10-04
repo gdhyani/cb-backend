@@ -7,6 +7,7 @@ import { CredentialProfileModel } from "../models/credential-profile.model.js";
 import { type ResourceKind, ResourceModel } from "../models/resource.model.js";
 import { VariableModel } from "../models/variable.model.js";
 import {
+  type MongoTarget,
   mysqlWantsTls,
   parseMongoUri,
   parseMysqlUri,
@@ -273,11 +274,18 @@ export function configAndSecret(
       smtp: "",
     }[kind];
     const sslmode = parsed.params.get("sslmode") ?? "";
-    // Host is shown to admins; credentials never are.
+    const mongo = kind === "mongodb" ? (parsed as MongoTarget) : undefined;
     const config = {
-      host: `${parsed.host}:${parsed.port}`,
+      // Shown to admins; credentials never are. Replica sets list every member; mongodb+srv shows the SRV name.
+      host: mongo?.srv
+        ? mongo.hosts[0]?.host
+        : mongo && mongo.hosts.length > 1
+          ? mongo.hosts.map((h) => `${h.host}:${h.port}`).join(",")
+          : `${parsed.host}:${parsed.port}`,
       database: parsed.database || defaultDb,
       tls:
+        (mongo?.srv === true &&
+          !["false"].includes(parsed.params.get("tls") ?? parsed.params.get("ssl") ?? "")) ||
         ["rediss", "smtps"].includes(parsed.protocol) ||
         (kind === "mysql" && mysqlWantsTls(parsed.params)) ||
         parsed.params.get("tls") === "true" ||

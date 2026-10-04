@@ -14,7 +14,6 @@ function invalid(field: string, message: string): AppError {
   return new AppError("VALIDATION_FAILED", { details: [{ path: field, message }] });
 }
 
-/** Single-host URIs only in M0 (mongodb+srv and multi-host replica sets come later). */
 function parse(uri: string, protocols: string[], defaultPort: number, field: string): ParsedConnection {
   // Name the usual mistakes instead of a generic "invalid URI" (the URL parser rejects them without detail).
   const port = /^[a-z+]+:\/\/(?:[^@/]*@)?(?:\[[^\]]*\]|[^:/?#]*):(\d+)/i.exec(uri)?.[1];
@@ -46,12 +45,29 @@ function parse(uri: string, protocols: string[], defaultPort: number, field: str
   };
 }
 
-export function parseMongoUri(uri: string, field = "connectionUri"): ParsedConnection {
-  if (uri.startsWith("mongodb+srv://"))
-    throw invalid(field, "mongodb+srv is not supported yet; use a mongodb:// URI");
-  if (/^mongodb:\/\/[^/]*,/.test(uri))
-    throw invalid(field, "multi-host URIs are not supported yet; use the primary host");
-  return parse(uri, ["mongodb"], 27017, field);
+export interface MongoTarget extends ParsedConnection {
+  /** mongodb+srv: `hosts` holds the one SRV name, resolved by the gateway at connect time. */
+  srv: boolean;
+  hosts: { host: string; port: number }[];
+}
+
+/** §10.8 mongodb: single host, replica-set host lists and mongodb+srv (the gateway discovers the primary). */
+export function parseMongoUri(uri: string, field = "connectionUri"): MongoTarget {
+  const srv = uri.startsWith("mongodb+srv://");
+  const m = /^(mongodb(?:\+srv)?:\/\/)((?:[^@/]*@)?)([^/?#]*)(.*)$/i.exec(uri);
+  if (!m) return { ...parse(uri, ["mongodb"], 27017, field), srv: false, hosts: [] };
+  const [, , auth = "", hostList = "", rest = ""] = m;
+  const hostSpecs = hostList.split(",").filter(Boolean);
+  if (hostSpecs.length === 0) throw invalid(field, "must include a host");
+  if (srv && (hostSpecs.length > 1 || /:\d+$/.test(hostSpecs[0] ?? "")))
+    throw invalid(field, "mongodb+srv takes one host name and no port");
+  // Each host is validated through the single-host parser (port range, characters); credentials/options once.
+  const hosts = hostSpecs.map((h) => {
+    const one = parse(`mongodb://${h}`, ["mongodb"], 27017, field);
+    return { host: one.host, port: one.port };
+  });
+  const first = parse(`mongodb://${auth}${hostSpecs[0]}${rest}`, ["mongodb"], 27017, field);
+  return { ...first, protocol: srv ? "mongodb+srv" : "mongodb", srv, hosts };
 }
 
 export function parseRedisUri(uri: string, field = "connectionUri"): ParsedConnection {
