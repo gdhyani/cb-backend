@@ -134,6 +134,11 @@ export const CreateResourceBody = z
       authScheme: AuthSchemeEnum.default("bearer"),
       authHeader: AuthHeader.optional(),
       provider: Provider.optional(),
+      /** Authenticated GET used by Save & test (from the preset), e.g. /v1/models. */
+      testPath: z
+        .string()
+        .regex(/^\/[^\s]*$/, "must start with /")
+        .optional(),
       apiKey: z.string().min(1),
       fakePrefix: z.string().max(20).default("cb_"),
       basePath: z
@@ -377,6 +382,7 @@ export function configAndSecret(
     "authScheme",
     "authHeader",
     "provider",
+    "testPath",
     "fakePrefix",
     "basePath",
     "redirectHosts",

@@ -4411,6 +4411,10 @@ components:
           type: string
           pattern: ^[a-z0-9-]{1,40}$
           description: UI hint (preset or dashboard type that made the service); never used by the gateway.
+        testPath:
+          type: string
+          pattern: ^/
+          description: Authenticated GET used by the connection test (set by presets, e.g. /v1/balance).
         apiKey:
           type: string
           minLength: 1

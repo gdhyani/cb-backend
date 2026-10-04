@@ -10,6 +10,7 @@
       "upstreamUrl": "https://api.openai.com",
       "authScheme": "bearer",
       "fakePrefix": "sk-cb-",
+      "testPath": "/v1/models",
       "basePath": "/v1",
       "redirectHosts": ["api.openai.com:443"]
     },
@@ -30,6 +31,7 @@
       "upstreamUrl": "https://api.anthropic.com",
       "authScheme": "x-api-key",
       "fakePrefix": "sk-ant-cb-",
+      "testPath": "/v1/models",
       "basePath": "",
       "redirectHosts": ["api.anthropic.com:443"]
     },
@@ -51,6 +53,7 @@
       "authScheme": "header",
       "authHeader": "x-goog-api-key",
       "fakePrefix": "AIzaCb",
+      "testPath": "/v1beta/models",
       "basePath": "",
       "redirectHosts": ["generativelanguage.googleapis.com:443"]
     },
@@ -68,6 +71,7 @@
       "upstreamUrl": "https://api.groq.com",
       "authScheme": "bearer",
       "fakePrefix": "gsk_cb_",
+      "testPath": "/openai/v1/models",
       "basePath": "/openai/v1",
       "redirectHosts": ["api.groq.com:443"]
     },
@@ -85,6 +89,7 @@
       "upstreamUrl": "https://api.mistral.ai",
       "authScheme": "bearer",
       "fakePrefix": "mistral_cb_",
+      "testPath": "/v1/models",
       "basePath": "/v1",
       "redirectHosts": ["api.mistral.ai:443"]
     },
@@ -102,6 +107,7 @@
       "upstreamUrl": "https://openrouter.ai",
       "authScheme": "bearer",
       "fakePrefix": "sk-or-cb-",
+      "testPath": "/api/v1/key",
       "basePath": "/api/v1",
       "redirectHosts": ["openrouter.ai:443"]
     },
@@ -118,6 +124,7 @@
       "upstreamUrl": "https://api.stripe.com",
       "authScheme": "bearer",
       "fakePrefix": "sk_test_cb_",
+      "testPath": "/v1/balance",
       "basePath": "",
       "redirectHosts": ["api.stripe.com:443"]
     },
@@ -134,6 +141,7 @@
       "upstreamUrl": "https://api.razorpay.com",
       "authScheme": "basic-password",
       "fakePrefix": "cb_",
+      "testPath": "/v1/payments?count=1",
       "basePath": "",
       "redirectHosts": ["api.razorpay.com:443"]
     },

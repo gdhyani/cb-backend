@@ -20,3 +20,20 @@ describe("draft connection test (J2)", () => {
     expect(r.latencyMs).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe("draft test hits an authenticated path (Save & test must reject bad keys)", () => {
+  it("uses the preset's testPath: a provider that 404s on / still rejects a bad key on /v1/balance", async () => {
+    const http = await import("node:http");
+    const srv = http.createServer((req, res) => {
+      if (req.url === "/v1/balance")
+        res.writeHead(req.headers.authorization === "Bearer good" ? 200 : 401).end();
+      else res.writeHead(404).end();
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const upstreamUrl = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    const config = { upstreamUrl, authScheme: "bearer", basePath: "", testPath: "/v1/balance" };
+    expect((await runDraftTest("http", "bad", config)).ok).toBe(false);
+    expect((await runDraftTest("http", "good", config)).ok).toBe(true);
+    srv.close();
+  });
+});

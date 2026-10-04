@@ -144,7 +144,9 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
     }
   },
   async http(secret, config) {
-    const base = `${String(config.upstreamUrl ?? "").replace(/\/$/, "")}${String(config.basePath ?? "")}`;
+    // An authenticated path when the preset knows one (a bare "/" often answers 404 whatever the key).
+    const path = String(config.testPath ?? config.basePath ?? "");
+    const base = `${String(config.upstreamUrl ?? "").replace(/\/$/, "")}${path}`;
     const headers = injectCredential(
       (config.authScheme as AuthScheme | undefined) ?? "bearer",
       { "user-agent": "cb-connection-test" },
