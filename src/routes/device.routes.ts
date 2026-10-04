@@ -4,6 +4,7 @@ import {
   cliLogoutHandler,
   listMyDevicesHandler,
   pollDeviceHandler,
+  refreshTokenHandler,
   revokeDeviceHandler,
   startDeviceHandler,
   whoamiHandler,
@@ -14,6 +15,7 @@ export const deviceRoutes = Router();
 
 deviceRoutes.post("/cli/device/start", startDeviceHandler);
 deviceRoutes.post("/cli/device/token", pollDeviceHandler);
+deviceRoutes.post("/cli/token/refresh", refreshTokenHandler);
 deviceRoutes.post("/cli/device/approve", requireAuth, approveDeviceHandler);
 deviceRoutes.get("/cli/whoami", requireAuth, whoamiHandler);
 deviceRoutes.post("/cli/logout", requireAuth, cliLogoutHandler);

@@ -132,7 +132,7 @@ export async function activateKillSwitch(
     reason: input.reason,
     createdBy: actorId,
   });
-  const reason = `kill switch: ${input.reason}`;
+  const reason = `emergency stop: ${input.reason}`;
   const id = input.targetId;
   const event =
     input.scope === "org"

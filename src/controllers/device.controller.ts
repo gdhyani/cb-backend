@@ -1,9 +1,11 @@
 import type { NextFunction, Request, Response } from "express";
+import { z } from "zod";
 import { AppError } from "../errors/app-error.js";
 import { toAppError } from "../errors/to-app-error.js";
 import { authOf } from "../middlewares/auth.middleware.js";
 import * as authService from "../services/auth.service.js";
 import * as deviceService from "../services/device.service.js";
+import * as tokenService from "../services/token.service.js";
 import { toObjectId } from "../utils/ids.js";
 import { sendSuccess } from "../utils/response.js";
 
@@ -71,5 +73,14 @@ export async function cliLogoutHandler(_req: Request, res: Response, next: NextF
     sendSuccess(res, { loggedOut: true });
   } catch (err) {
     next(toAppError(err, "device.controller.cliLogout: failed to log out device"));
+  }
+}
+
+export async function refreshTokenHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { refreshToken } = z.object({ refreshToken: z.string().min(10) }).parse(req.body);
+    sendSuccess(res, await tokenService.refreshTokens(refreshToken));
+  } catch (err) {
+    next(toAppError(err, "device.controller.refreshToken: failed to refresh CLI tokens"));
   }
 }

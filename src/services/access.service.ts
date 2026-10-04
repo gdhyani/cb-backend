@@ -90,7 +90,7 @@ export async function assertRuntimeAccess(
   const kill = await activeKillSwitch(userId, env, extra);
   if (kill)
     throw new AppError("KILLSWITCH_ACTIVE", {
-      message: `Access is stopped by a kill switch: ${kill.reason}`,
+      message: `Access is stopped by an emergency stop: ${kill.reason}`,
     });
   if (!(await hasEnvironmentAccess(userId, env))) throw new AppError("NO_ACCESS");
 }
