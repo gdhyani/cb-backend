@@ -370,3 +370,34 @@ describe("CLI device login (FR-AUTH-002, J5)", () => {
     );
   });
 });
+
+describe("org stats (dashboard charts)", () => {
+  it("returns 14 days of activity, resources by kind and grant mix; developers only see their own activity", async () => {
+    const { owner, orgId } = await signupOwner(app);
+    const project = await owner.post(`/api/orgs/${orgId}/projects`, { name: "Charts" });
+    const envId = project.body.data.environments[0].id as string;
+    await owner.post(`/api/environments/${envId}/resources`, {
+      kind: "redis",
+      name: "cache",
+      connectionUri: "redis://:pw-1234@127.0.0.1:6390",
+    });
+    const dev = await addMember(app, owner, orgId, "Dev");
+    await owner.post(`/api/environments/${envId}/grants`, {
+      userId: dev.userId,
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+
+    const stats = await owner.get(`/api/orgs/${orgId}/stats`);
+    expect(stats.status).toBe(200);
+    expect(stats.body.data.scope).toBe("org");
+    expect(stats.body.data.days).toHaveLength(14);
+    expect(stats.body.data.days.at(-1).byCategory.config).toBeGreaterThan(0);
+    expect(stats.body.data.resourcesByKind).toEqual([{ kind: "redis", count: 1 }]);
+    expect(stats.body.data.grants).toEqual({ permanent: 0, temporary: 1 });
+    expect(stats.body.data.connectionsByProject[0]).toMatchObject({ name: "Charts", connections: 0 });
+
+    const mine = await dev.member.get(`/api/orgs/${orgId}/stats`);
+    expect(mine.body.data.scope).toBe("me");
+    expect(mine.body.data.days.at(-1).byCategory.config).toBe(0);
+  });
+});

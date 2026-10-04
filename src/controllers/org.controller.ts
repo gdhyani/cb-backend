@@ -6,6 +6,7 @@ import * as auditService from "../services/audit.service.js";
 import * as deviceService from "../services/device.service.js";
 import * as inviteService from "../services/invite.service.js";
 import * as orgService from "../services/org.service.js";
+import * as statsService from "../services/stats.service.js";
 import { toObjectId } from "../utils/ids.js";
 import { PaginationQuery } from "../utils/pagination.js";
 import { sendPaginated, sendSuccess } from "../utils/response.js";
@@ -111,5 +112,13 @@ export async function listAuditHandler(req: Request, res: Response, next: NextFu
     sendPaginated(res, result.items, result.pagination);
   } catch (err) {
     next(toAppError(err, "org.controller.listAudit: failed to list audit events"));
+  }
+}
+
+export async function getOrgStatsHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    sendSuccess(res, await statsService.getOrgStats(authOf(res).userId, orgIdOf(req)));
+  } catch (err) {
+    next(toAppError(err, "org.controller.getOrgStats: failed to load organization stats"));
   }
 }
