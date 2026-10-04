@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../../src/app.js";
 import { connectMongo, disconnectMongo } from "../../src/clients/mongodb.client.js";
 import { loadEnv, setEnv } from "../../src/config/env.js";
+import { ResourceModel } from "../../src/models/resource.model.js";
 import { createServer } from "../../src/server.js";
 import { localListener } from "../helpers/agent.js";
 import { addMember, cli, loginDevice, signupOwner } from "../helpers/api.js";
@@ -104,6 +105,15 @@ describe.skipIf(!PASSWORD || !fs.existsSync(CA_FILE))("mysql upstream TLS (§10.
     } finally {
       setEnv(loadEnv({ ...testEnvVars(backendDb.uri), UPSTREAM_EXTRA_CA_FILE: CA_FILE }));
     }
+  });
+
+  it("test connection honours ?ssl=true in the URI even when an older stored config says tls:false", async () => {
+    const { owner, resourceId, listener } = await scenario(TLS_URI("?ssl=true"));
+    // Services saved before ?ssl=true was recognised kept tls:false (cp-test MYSQL_URL_LOCAL_TLS).
+    await ResourceModel.updateOne({ _id: resourceId }, { $set: { "config.tls": false } });
+    const res = await owner.post(`/api/resources/${resourceId}/test`, {});
+    expect(res.body.data).toMatchObject({ ok: true });
+    listener.close();
   });
 
   it("a TLS-only server without ?ssl in the stored URI explains the fix in the test-connection result", async () => {

@@ -14,7 +14,7 @@ import { AppError } from "../errors/app-error.js";
 import { type AuthScheme, injectCredential } from "../gateway/http/http-adapter.js";
 import { upstreamCa, upstreamDispatcher } from "../gateway/http/upstream.js";
 import { type ResourceKind, ResourceModel } from "../models/resource.model.js";
-import { MYSQL_TLS_HINT, parseMongoUri } from "../utils/connection-uri.js";
+import { MYSQL_TLS_HINT, mysqlWantsTls, parseMongoUri } from "../utils/connection-uri.js";
 import { requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { DEFAULT_PROFILE, readProfileSecret } from "./profile.service.js";
@@ -78,11 +78,16 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
     }
   },
   async mysql(secret, config) {
+    // Decide TLS from the URI like the gateway does (older services stored tls:false next to ?ssl=true), and keep
+    // ssl/ssl-mode/sslmode out of what mysql2 parses: it rejects ssl=true ("SSL profile must be an object").
+    const url = new URL(secret);
+    const wantsTls = tlsWanted(config) || mysqlWantsTls(url.searchParams);
+    for (const k of ["ssl", "ssl-mode", "sslmode", "tls"]) url.searchParams.delete(k);
     const conn = await mysql
       .createConnection({
-        uri: secret,
+        uri: url.toString(),
         connectTimeout: TIMEOUT_MS,
-        ...(tlsWanted(config) ? { ssl: { ca: upstreamCa(config.caCert), rejectUnauthorized: true } } : {}),
+        ...(wantsTls ? { ssl: { ca: upstreamCa(config.caCert), rejectUnauthorized: true } } : {}),
       })
       .catch((err: { errno?: number; message?: string }) => {
         // ER_SECURE_TRANSPORT_REQUIRED: tell the admin the fix instead of a bare refusal.
