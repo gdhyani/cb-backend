@@ -762,3 +762,30 @@ describe("D8 extra keys link to their service", () => {
     expect(left.body.data).toEqual([]);
   });
 });
+
+describe("J4 removing a service cleans up per-person logins", () => {
+  it("deleting a resource removes its profile choice from grants", async () => {
+    const ctx = await signupOwner(app);
+    const { userId: bobId } = await addMember(app, ctx.owner, ctx.orgId, "Bob");
+    const project = await ctx.owner.post(`/api/orgs/${ctx.orgId}/projects`, { name: "P" });
+    const envId = project.body.data.environments[0].id as string;
+    const db = await ctx.owner.post(`/api/environments/${envId}/resources`, {
+      kind: "mongodb",
+      name: "db",
+      connectionUri: REAL_MONGO,
+    });
+    const profile = await ctx.owner.post(`/api/resources/${db.body.data.id}/profiles`, {
+      name: "readonly",
+      connectionUri: REAL_MONGO,
+    });
+    expect(profile.status).toBe(201);
+    const grant = await ctx.owner.post(`/api/environments/${envId}/grants`, {
+      userId: bobId,
+      resourceProfiles: [{ resourceId: db.body.data.id, profile: "readonly" }],
+    });
+    expect(grant.status).toBe(201);
+    await ctx.owner.delete(`/api/resources/${db.body.data.id}`);
+    const stored = await GrantModel.findById(grant.body.data.id).lean();
+    expect(stored?.resourceProfiles).toEqual([]);
+  });
+});

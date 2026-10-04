@@ -2,6 +2,7 @@ import type { Types } from "mongoose";
 import type { BusEvent } from "../events/bus.js";
 import { DeviceModel } from "../models/device.model.js";
 import { EnvironmentModel } from "../models/environment.model.js";
+import { ResourceModel } from "../models/resource.model.js";
 import { assertRuntimeAccess } from "./access.service.js";
 import { resolveProfile } from "./profile.service.js";
 
@@ -53,6 +54,11 @@ export async function revalidate(s: RuntimeSubject): Promise<string | undefined>
     await assertRuntimeAccess(s.userId, env, { deviceId: s.deviceId, resourceId: s.resource?.id });
   } catch (err) {
     return err instanceof Error ? err.message : "access revoked";
+  }
+  if (s.resource) {
+    // A removed or disabled service ends its tunnels (J7).
+    const live = await ResourceModel.exists({ _id: s.resource.id, disabledAt: null });
+    if (!live) return "service removed";
   }
   if (s.resource && s.profile !== undefined) {
     const current = await resolveProfile(s.userId, s.environmentId, s.resource.id);

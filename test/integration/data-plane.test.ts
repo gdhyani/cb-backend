@@ -467,6 +467,41 @@ describe("revocation (J7, FR-GW-007, S4)", () => {
     listener.close();
   });
 
+  it("J7 removing a service closes its live redis connection within 5 s", async () => {
+    const { token, envId, resources, boot, owner } = await scenario();
+    const listener = await localListener(base, token, { layer: "1", env: envId, resource: resources.cache });
+    const redisUrl = boot.body.data.listeners.find((l: { kind: string }) => l.kind === "redis").env.REDIS_URL;
+    const client = new Redis(fill(redisUrl, listener.port), {
+      maxRetriesPerRequest: 0,
+      retryStrategy: () => null,
+    });
+    client.on("error", () => undefined);
+    await client.set("k", "v");
+    const closed = new Promise<number>((r) => client.once("end", () => r(Date.now())));
+    const startedAt = Date.now();
+    expect((await owner.delete(`/api/resources/${resources.cache}`)).status).toBe(200);
+    expect((await closed) - startedAt).toBeLessThan(5_000);
+    expect(listener.closeCodes).toContain(4410);
+    listener.close();
+  });
+
+  it("J7 disabling a service closes its live redis connection within 5 s", async () => {
+    const { token, envId, resources, boot, owner } = await scenario();
+    const listener = await localListener(base, token, { layer: "1", env: envId, resource: resources.cache });
+    const redisUrl = boot.body.data.listeners.find((l: { kind: string }) => l.kind === "redis").env.REDIS_URL;
+    const client = new Redis(fill(redisUrl, listener.port), {
+      maxRetriesPerRequest: 0,
+      retryStrategy: () => null,
+    });
+    client.on("error", () => undefined);
+    await client.set("k", "v");
+    const closed = new Promise<number>((r) => client.once("end", () => r(Date.now())));
+    const startedAt = Date.now();
+    expect((await owner.patch(`/api/resources/${resources.cache}`, { disabled: true })).status).toBe(200);
+    expect((await closed) - startedAt).toBeLessThan(5_000);
+    listener.close();
+  });
+
   it("J7 temporary access expiry closes tunnels; HTTP then gets 403 cb_access_revoked", async () => {
     const { token, envId, resources, boot, owner, bob } = await scenario(false);
     void boot;

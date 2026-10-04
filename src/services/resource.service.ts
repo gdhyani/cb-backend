@@ -4,7 +4,9 @@ import { z } from "zod";
 import { getEnv } from "../config/env.js";
 import { encryptSecret } from "../crypto/envelope.js";
 import { AppError } from "../errors/app-error.js";
+import { bus } from "../events/bus.js";
 import { CredentialProfileModel } from "../models/credential-profile.model.js";
+import { GrantModel } from "../models/grant.model.js";
 import { type ResourceKind, ResourceModel } from "../models/resource.model.js";
 import { VariableModel } from "../models/variable.model.js";
 import {
@@ -459,6 +461,13 @@ export async function updateResource(
     returnDocument: "after",
   }).lean();
   if (!updated) throw new AppError("NOT_FOUND", { message: "Resource not found." });
+  if (input.disabled === true)
+    bus.publish({
+      type: "access.revoked",
+      scope: "resource",
+      resourceId: resourceId.toHexString(),
+      reason: "service disabled",
+    });
   await touchEnvironment(resource.environmentId);
   await recordAudit({
     orgId: resource.orgId,
@@ -477,6 +486,16 @@ export async function deleteResource(actorId: string, resourceId: Types.ObjectId
   await VariableModel.deleteMany({ resourceId });
   await CredentialProfileModel.deleteMany({ resourceId });
   await ResourceModel.deleteOne({ _id: resourceId });
+  await GrantModel.updateMany(
+    { "resourceProfiles.resourceId": resourceId },
+    { $pull: { resourceProfiles: { resourceId } } },
+  );
+  bus.publish({
+    type: "access.revoked",
+    scope: "resource",
+    resourceId: resourceId.toHexString(),
+    reason: "service removed",
+  });
   await touchEnvironment(resource.environmentId);
   await recordAudit({
     orgId: resource.orgId,
