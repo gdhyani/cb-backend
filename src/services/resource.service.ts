@@ -7,6 +7,7 @@ import { CredentialProfileModel } from "../models/credential-profile.model.js";
 import { type ResourceKind, ResourceModel } from "../models/resource.model.js";
 import { VariableModel } from "../models/variable.model.js";
 import {
+  mysqlWantsTls,
   parseMongoUri,
   parseMysqlUri,
   parsePostgresUri,
@@ -278,6 +279,7 @@ export function configAndSecret(
       database: parsed.database || defaultDb,
       tls:
         ["rediss", "smtps"].includes(parsed.protocol) ||
+        (kind === "mysql" && mysqlWantsTls(parsed.params)) ||
         parsed.params.get("tls") === "true" ||
         ["require", "verify-ca", "verify-full"].includes(sslmode),
     };

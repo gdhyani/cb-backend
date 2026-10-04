@@ -15,6 +15,7 @@ import { AppError } from "../errors/app-error.js";
 import { injectCredential } from "../gateway/http/http-adapter.js";
 import { upstreamCa, upstreamDispatcher } from "../gateway/http/upstream.js";
 import { type ResourceKind, ResourceModel } from "../models/resource.model.js";
+import { MYSQL_TLS_HINT } from "../utils/connection-uri.js";
 import { requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { DEFAULT_PROFILE, readProfileSecret } from "./profile.service.js";
@@ -75,11 +76,17 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
     }
   },
   async mysql(secret, config) {
-    const conn = await mysql.createConnection({
-      uri: secret,
-      connectTimeout: TIMEOUT_MS,
-      ...(tlsWanted(config) ? { ssl: { ca: upstreamCa(), rejectUnauthorized: true } } : {}),
-    });
+    const conn = await mysql
+      .createConnection({
+        uri: secret,
+        connectTimeout: TIMEOUT_MS,
+        ...(tlsWanted(config) ? { ssl: { ca: upstreamCa(), rejectUnauthorized: true } } : {}),
+      })
+      .catch((err: { errno?: number; message?: string }) => {
+        // ER_SECURE_TRANSPORT_REQUIRED: tell the admin the fix instead of a bare refusal.
+        if (err.errno === 3159) throw new Error(`${err.message} — ${MYSQL_TLS_HINT}`);
+        throw err;
+      });
     try {
       const [rows] = await conn.query("SELECT CURRENT_USER() AS u, VERSION() AS v");
       const row = (rows as { u: string; v: string }[])[0];

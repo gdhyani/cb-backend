@@ -33,7 +33,9 @@ jobs:
         run: |
           echo "CB_TEST_DB_PASSWORD=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
           echo "CB_TEST_REDIS_PASSWORD=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
-      - name: Start Postgres, MySQL, Redis, Mailpit and S3 test services
+      - name: Generate throwaway TLS test certificates
+        run: ./scripts/test-certs.sh
+      - name: Start Postgres, MySQL (plain + TLS), Redis, Mailpit and S3 test services
         run: docker compose -f docker-compose.test.yml up -d
       - run: npm ci
       - run: npx biome check src test
@@ -43,8 +45,9 @@ jobs:
           for i in $(seq 1 60); do
             pg=$(docker compose -f docker-compose.test.yml exec -T postgres-auth pg_isready -q && echo ok || true)
             my=$(docker compose -f docker-compose.test.yml exec -T mysql-auth mysqladmin ping -h 127.0.0.1 --silent 2>/dev/null && echo ok || true)
+            myt=$(docker compose -f docker-compose.test.yml exec -T mysql-tls mysqladmin ping -h 127.0.0.1 --silent 2>/dev/null && echo ok || true)
             s3=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9010/ || true)
-            if [ "$pg" = ok ] && [ "$my" = ok ] && [ "$s3" != "000" ]; then echo "services ready"; exit 0; fi
+            if [ "$pg" = ok ] && [ "$my" = ok ] && [ "$myt" = ok ] && [ "$s3" != "000" ]; then echo "services ready"; exit 0; fi
             sleep 2
           done
           docker compose -f docker-compose.test.yml ps
