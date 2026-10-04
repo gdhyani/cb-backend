@@ -3,10 +3,12 @@ import type { AddressInfo } from "node:net";
 import { createApp } from "./app.js";
 import { clients } from "./clients/index.js";
 import type { Client } from "./clients/types.js";
-import { type Env, EnvError, loadEnv } from "./config/env.js";
-import { SHUTDOWN_TIMEOUT_MS } from "./constants.js";
+import { type Env, EnvError, loadEnv, setEnv } from "./config/env.js";
+import { GRANT_SWEEP_INTERVAL_MS, SHUTDOWN_TIMEOUT_MS } from "./constants.js";
 import { logger } from "./logger/logger.js";
 import { createServer } from "./server.js";
+import { closeAllAgentStreams } from "./services/agent-events.service.js";
+import { sweepExpiredGrants } from "./services/grant.service.js";
 
 export interface StartupOptions {
   env?: NodeJS.ProcessEnv;
@@ -50,6 +52,7 @@ export async function startup(opts: StartupOptions = {}): Promise<RunningServer>
     logger.error(err instanceof EnvError ? err.message : `startup: env check failed — ${message(err)}`);
     return fail(err);
   }
+  setEnv(env);
   logger.level = env.LOG_LEVEL;
 
   const connected: Client[] = [];
@@ -65,15 +68,25 @@ export async function startup(opts: StartupOptions = {}): Promise<RunningServer>
     }
   }
 
-  const server = createServer(createApp());
+  const { server, gateway } = createServer(createApp());
   await new Promise<void>((resolve) => server.listen(env.PORT, resolve));
   const { port } = server.address() as AddressInfo;
   logger.info(`ready on :${port} (env=${env.NODE_ENV})`);
+
+  const sweeper = setInterval(() => {
+    sweepExpiredGrants().catch((err: unknown) =>
+      logger.error(`grants: expiry sweep failed — ${message(err)}`),
+    );
+  }, GRANT_SWEEP_INTERVAL_MS);
+  sweeper.unref();
 
   let shuttingDown: Promise<void> | undefined;
   const shutdown = (reason: string, exitCode = 0): Promise<void> => {
     shuttingDown ??= (async () => {
       logger.info(`shutdown started (${reason})`);
+      clearInterval(sweeper);
+      gateway.closeAll();
+      closeAllAgentStreams();
       const force = setTimeout(() => {
         logger.error(`shutdown: connections still open after ${SHUTDOWN_TIMEOUT_MS}ms, forcing close`);
         server.closeAllConnections();
