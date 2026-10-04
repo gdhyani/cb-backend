@@ -26,7 +26,28 @@ export const BROKERED_FIELDS: Record<ResourceKind, readonly string[]> = {
   http: ["key", "baseUrl"],
   oauth: ["clientSecret"],
   aws: ["accessKeyId", "secretAccessKey", "endpoint", "region"],
+  "google-sa": ["credentialsJson", "projectId", "clientEmail", "privateKey"],
+  apns: ["key", "keyId", "teamId"],
 };
+
+const GOOGLE_DEFAULT_HOSTS = ["oauth2.googleapis.com:443", "fcm.googleapis.com:443"];
+const APNS_DEFAULT_HOSTS = ["api.push.apple.com:443", "api.sandbox.push.apple.com:443"];
+const HttpsUrl = z.url().refine((u) => u.startsWith("https://"), "must be an https:// URL");
+const PemPrivateKey = z.string().refine((k) => k.includes("PRIVATE KEY-----"), "must be a PEM private key");
+
+/** A Google service-account JSON key file (Firebase Admin). */
+const ServiceAccountJson = z.string().refine((raw) => {
+  try {
+    const sa = JSON.parse(raw) as Record<string, unknown>;
+    return (
+      typeof sa.client_email === "string" &&
+      typeof sa.private_key === "string" &&
+      typeof sa.project_id === "string"
+    );
+  } catch {
+    return false;
+  }
+}, "must be a service-account JSON key with project_id, client_email and private_key");
 
 const HostPort = z.string().regex(/^[a-z0-9.-]+:\d{1,5}$/i, "use host:port, e.g. api.stripe.com:443");
 const Name = z.string().trim().min(1).max(60);
@@ -65,6 +86,22 @@ export const CreateResourceBody = z.discriminatedUnion("kind", [
     secretAccessKey: z.string().min(8),
   }),
   z.object({
+    kind: z.literal("google-sa"),
+    name: Name,
+    serviceAccountJson: ServiceAccountJson,
+    upstreamUrl: HttpsUrl.optional(),
+    redirectHosts: z.array(HostPort).max(10).optional(),
+  }),
+  z.object({
+    kind: z.literal("apns"),
+    name: Name,
+    keyId: z.string().regex(/^[A-Z0-9]{10}$/, "10-character key ID from Apple"),
+    teamId: z.string().regex(/^[A-Z0-9]{10}$/, "10-character team ID from Apple"),
+    privateKey: PemPrivateKey,
+    upstreamUrl: HttpsUrl.optional(),
+    redirectHosts: z.array(HostPort).max(10).optional(),
+  }),
+  z.object({
     kind: z.literal("oauth"),
     name: Name,
     tokenUrl: z.url().refine((u) => u.startsWith("https://"), "must be an https:// URL"),
@@ -75,6 +112,16 @@ export const CreateResourceBody = z.discriminatedUnion("kind", [
 ]);
 
 export const UpdateResourceBody = z.object({
+  serviceAccountJson: ServiceAccountJson.optional(),
+  keyId: z
+    .string()
+    .regex(/^[A-Z0-9]{10}$/)
+    .optional(),
+  teamId: z
+    .string()
+    .regex(/^[A-Z0-9]{10}$/)
+    .optional(),
+  privateKey: PemPrivateKey.optional(),
   accessKeyId: z.string().min(3).optional(),
   secretAccessKey: z.string().min(8).optional(),
   region: z
@@ -152,6 +199,44 @@ function configAndSecret(
         ? JSON.stringify({ accessKeyId: input.accessKeyId, secretAccessKey: input.secretAccessKey })
         : undefined;
     return { config, secret };
+  }
+  const hostsFrom = (fallback: string[]) =>
+    (
+      (input.redirectHosts as string[] | undefined) ??
+      (current.redirectHosts as string[] | undefined) ??
+      fallback
+    ).map((h) => h.toLowerCase());
+  const upstream = input.upstreamUrl ? { upstreamUrl: input.upstreamUrl } : {};
+  if (kind === "google-sa") {
+    const raw = input.serviceAccountJson as string | undefined;
+    if (!raw)
+      return {
+        config: { ...current, ...upstream, redirectHosts: hostsFrom(GOOGLE_DEFAULT_HOSTS) },
+        secret: undefined,
+      };
+    const sa = JSON.parse(raw) as { project_id: string; client_email: string; token_uri?: string };
+    const tokenUri = sa.token_uri ?? "https://oauth2.googleapis.com/token";
+    const fallback = [`${new URL(tokenUri).hostname}:443`, "fcm.googleapis.com:443"];
+    // Only identifiers are kept in config; the private key lives in the encrypted secret.
+    const config = {
+      ...current,
+      ...upstream,
+      projectId: sa.project_id,
+      clientEmail: sa.client_email,
+      tokenUri,
+      redirectHosts: [...new Set(hostsFrom(fallback))],
+    };
+    return { config, secret: raw };
+  }
+  if (kind === "apns") {
+    const config = {
+      ...current,
+      ...upstream,
+      ...(input.keyId ? { keyId: input.keyId } : {}),
+      ...(input.teamId ? { teamId: input.teamId } : {}),
+      redirectHosts: hostsFrom(APNS_DEFAULT_HOSTS),
+    };
+    return { config, secret: input.privateKey as string | undefined };
   }
   if (kind === "oauth") {
     const tokenUrl = (input.tokenUrl as string | undefined) ?? (current.tokenUrl as string | undefined) ?? "";

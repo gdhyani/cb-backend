@@ -27,7 +27,7 @@ export interface OAuthResourceConfig {
 
 export const OAUTH_FAKE_PREFIX = "cb-";
 
-async function readBody(req: GatewayRequest): Promise<Buffer> {
+export async function readBody(req: GatewayRequest): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of req as unknown as AsyncIterable<Buffer>) chunks.push(Buffer.from(chunk));
   return Buffer.concat(chunks);

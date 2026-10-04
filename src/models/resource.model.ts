@@ -10,6 +10,8 @@ export const RESOURCE_KINDS = [
   "http",
   "oauth",
   "aws",
+  "google-sa",
+  "apns",
 ] as const;
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 

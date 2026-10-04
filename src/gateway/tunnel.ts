@@ -16,8 +16,10 @@ import { recordAudit } from "../services/audit.service.js";
 import { loadOrgCa } from "../services/org-ca.service.js";
 import { readResourceSecret } from "../services/resource.service.js";
 import { eventConcerns, revalidate } from "../services/runtime-access.service.js";
+import { createApnsHandler } from "./http/apns-adapter.js";
 import { createAwsHandler } from "./http/aws-adapter.js";
-import { createHttpHandler, deniedHandler, serveHttp1, serveTls } from "./http/http-adapter.js";
+import { createGoogleSaHandler } from "./http/google-sa-adapter.js";
+import { createHttpHandler, deniedHandler, type Handler, serveHttp1, serveTls } from "./http/http-adapter.js";
 import { createOAuthHandler } from "./http/oauth-adapter.js";
 import { mongodbAdapter } from "./mongodb/mongodb-adapter.js";
 import { mysqlAdapter } from "./mysql/mysql-adapter.js";
@@ -82,6 +84,18 @@ const STREAM_ADAPTERS: Partial<Record<ResourceKind, StreamAdapter>> = {
   smtp: smtpAdapter,
 };
 
+/** HTTP-family kinds: served as HTTP (Layer 1) or TLS-terminated HTTP/1.1 + HTTP/2 (Layer 2). */
+const HTTP_HANDLERS: Partial<Record<ResourceKind, (ctx: TunnelContext) => Handler>> = {
+  http: createHttpHandler,
+  oauth: createOAuthHandler,
+  aws: createAwsHandler,
+  "google-sa": createGoogleSaHandler,
+  apns: createApnsHandler,
+};
+
+/** Kinds reachable through Layer 2 host redirection (aws is Layer 1 only). */
+const LAYER2_KINDS: readonly ResourceKind[] = ["http", "oauth", "google-sa", "apns"];
+
 async function handleTunnel(
   ws: WebSocket,
   stream: Duplex,
@@ -111,7 +125,7 @@ async function handleTunnel(
       ? await ResourceModel.findOne({ _id: params.resource, environmentId: env._id, disabledAt: null }).lean()
       : await ResourceModel.findOne({
           environmentId: env._id,
-          kind: { $in: ["http", "oauth"] },
+          kind: { $in: [...LAYER2_KINDS] },
           disabledAt: null,
           "config.redirectHosts": hostPort,
         }).lean();
@@ -133,7 +147,7 @@ async function handleTunnel(
   } catch (err) {
     const code = err instanceof AppError ? err.code : "INTERNAL_ERROR";
     void recordAudit({ ...audit, action: "tunnel.denied", outcome: "denied", meta: { reason: code } });
-    if (resource.kind === "http" || resource.kind === "oauth" || resource.kind === "aws") {
+    if (HTTP_HANDLERS[resource.kind as ResourceKind]) {
       // HTTP clients get a readable 403 instead of a dropped connection (J7).
       if (params.layer === "1") serveHttp1(stream, deniedHandler);
       else serveTls(stream, await leavesFor(env.orgId), deniedHandler);
@@ -199,13 +213,9 @@ async function handleTunnel(
   });
 
   try {
-    if (resource.kind === "http" || resource.kind === "oauth" || resource.kind === "aws") {
-      const handler =
-        resource.kind === "oauth"
-          ? createOAuthHandler(ctx)
-          : resource.kind === "aws"
-            ? createAwsHandler(ctx)
-            : createHttpHandler(ctx);
+    const createHandler = HTTP_HANDLERS[resource.kind as ResourceKind];
+    if (createHandler) {
+      const handler = createHandler(ctx);
       if (ctx.layer === 1) serveHttp1(stream, handler);
       else serveTls(stream, await leavesFor(env.orgId), handler);
       return;

@@ -35,6 +35,9 @@ function stream(secret: Buffer, parts: string[], length: number): Buffer {
   return Buffer.concat(out).subarray(0, length);
 }
 
+/** Raw deterministic bytes (fake key material seeds, FR-CRY-004). */
+export const deriveBytes = stream;
+
 function fromAlphabet(bytes: Buffer, alphabet: string): string {
   return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
 }

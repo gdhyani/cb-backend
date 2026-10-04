@@ -9,7 +9,14 @@ import { ResourceModel } from "../models/resource.model.js";
 import { VariableModel } from "../models/variable.model.js";
 import { assertRuntimeAccess, requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
-import { fakeApiKey, fakeAwsKeys, fakeDbCredentials, fakeRedisCredentials } from "./fakes.service.js";
+import {
+  fakeApiKey,
+  fakeApnsKey,
+  fakeAwsKeys,
+  fakeDbCredentials,
+  fakeGoogleKey,
+  fakeRedisCredentials,
+} from "./fakes.service.js";
 import { ensureOrgCa } from "./org-ca.service.js";
 import { generatedValue } from "./variable.service.js";
 
@@ -103,6 +110,17 @@ export async function buildBootstrap(
     return l;
   };
 
+  const redirectFor = (r: (typeof resources)[number]) => {
+    for (const hp of ((r.config ?? {}) as { redirectHosts?: string[] }).redirectHosts ?? []) {
+      const i = hp.lastIndexOf(":");
+      redirects.set(hp, {
+        host: hp.slice(0, i),
+        port: Number(hp.slice(i + 1)),
+        resourceId: r._id.toHexString(),
+      });
+    }
+  };
+
   for (const v of variables) {
     switch (v.type) {
       case "plain":
@@ -156,6 +174,32 @@ export async function buildBootstrap(
           else if (v.field === "region") plain[v.key] = String(config.region ?? "us-east-1");
           else if (v.field === "accessKeyId") plain[v.key] = fake.accessKeyId;
           else if (v.field === "secretAccessKey") plain[v.key] = fake.secretAccessKey;
+        } else if (r.kind === "google-sa") {
+          const sa = config as unknown as { projectId: string; clientEmail: string; tokenUri: string };
+          const value = async () => {
+            if (v.field === "projectId") return sa.projectId;
+            if (v.field === "clientEmail") return sa.clientEmail;
+            const { privatePem } = await fakeGoogleKey(scope);
+            if (v.field === "privateKey") return privatePem;
+            // A complete fake key file, for GOOGLE_APPLICATION_CREDENTIALS-style JSON env vars.
+            return JSON.stringify({
+              type: "service_account",
+              project_id: sa.projectId,
+              private_key_id: `cb${fakeApiKey(scope, "").slice(0, 38).toLowerCase()}`,
+              private_key: privatePem,
+              client_email: sa.clientEmail,
+              client_id: "",
+              token_uri: sa.tokenUri,
+            });
+          };
+          plain[v.key] = await value();
+          redirectFor(r);
+        } else if (r.kind === "apns") {
+          const ap = config as unknown as { keyId: string; teamId: string };
+          if (v.field === "keyId") plain[v.key] = ap.keyId;
+          else if (v.field === "teamId") plain[v.key] = ap.teamId;
+          else if (v.field === "key") plain[v.key] = fakeApnsKey(scope).privatePem;
+          redirectFor(r);
         } else if (r.kind === "oauth" && v.field === "clientSecret") {
           plain[v.key] = fakeApiKey(scope, "cb-");
           for (const hp of config.redirectHosts ?? []) {
