@@ -16,11 +16,20 @@ function invalid(field: string, message: string): AppError {
 
 /** Single-host URIs only in M0 (mongodb+srv and multi-host replica sets come later). */
 function parse(uri: string, protocols: string[], defaultPort: number, field: string): ParsedConnection {
+  // Name the usual mistakes instead of a generic "invalid URI" (the URL parser rejects them without detail).
+  const port = /^[a-z+]+:\/\/(?:[^@/]*@)?(?:\[[^\]]*\]|[^:/?#]*):(\d+)/i.exec(uri)?.[1];
+  if (port !== undefined && (Number(port) < 1 || Number(port) > 65535))
+    throw invalid(field, `port ${port} is out of range (1–65535)`);
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(uri))
+    throw invalid(field, "must start with a scheme, e.g. mongodb://");
   let url: URL;
   try {
     url = new URL(uri);
   } catch {
-    throw invalid(field, "is not a valid connection URI");
+    throw invalid(
+      field,
+      "is not a valid connection URI (check the host, port and URL-encode special characters in the password)",
+    );
   }
   const protocol = url.protocol.replace(/:$/, "");
   if (!protocols.includes(protocol))
