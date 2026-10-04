@@ -18,6 +18,7 @@ import {
   listProfilesHandler,
   revokeGrantHandler,
   rotateProfileHandler,
+  testResourceHandler,
   updateGrantHandler,
   updateResourceHandler,
   updateVariableHandler,
@@ -39,6 +40,7 @@ environmentRoutes.get("/environments/:envId/preview", previewHandler);
 environmentRoutes.post("/environments/:envId/grants", createGrantHandler);
 environmentRoutes.patch("/resources/:resourceId", updateResourceHandler);
 environmentRoutes.delete("/resources/:resourceId", deleteResourceHandler);
+environmentRoutes.post("/resources/:resourceId/test", testResourceHandler);
 environmentRoutes.get("/resources/:resourceId/profiles", listProfilesHandler);
 environmentRoutes.post("/resources/:resourceId/profiles", createProfileHandler);
 environmentRoutes.put("/resources/:resourceId/profiles/:name", rotateProfileHandler);

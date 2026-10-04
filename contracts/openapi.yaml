@@ -38,6 +38,35 @@ tags:
   - name: Agent
     description: Agent bootstrap snapshot and event stream (device token).
 paths:
+  /api/presets:
+    get:
+      operationId: listPresets
+      tags:
+        - Resources
+      summary: Provider presets (templates for new resources, §10.8)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Preset"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/health:
     get:
       operationId: getHealth
@@ -1894,6 +1923,51 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/resources/{resourceId}/test:
+    post:
+      operationId: testResource
+      tags:
+        - Resources
+      summary: Test a resource's real credentials from the gateway (admin)
+      description: Connects to the real service with the credentials of `profile` (default "default") and reports the outcome. The credential is never returned, and is scrubbed from error messages.
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/resourceId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                profile:
+                  type: string
+                  description: Credential profile to test.
+                  default: default
+      responses:
+        "200":
+          description: Test finished (check `ok`)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ResourceTestResult"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/resources/{resourceId}/profiles:
     get:
       operationId: listProfiles
@@ -2408,6 +2482,61 @@ components:
               statusCode: 410
               correlationId: c0ffee12-0000-4000-8000-000000000000
   schemas:
+    ResourceTestResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        profile:
+          type: string
+        latencyMs:
+          type: integer
+        message:
+          type: string
+          description: Outcome in plain words; never contains the credential.
+      required: [ok, profile, latencyMs, message]
+    Preset:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        category:
+          type: string
+          enum: [AI, Payments, Auth, Push, Storage, Email, Database]
+        kind:
+          type: string
+          enum: [mongodb, redis, postgres, mysql, smtp, http, oauth, aws, google-sa, apns]
+        description:
+          type: string
+        defaults:
+          type: object
+          additionalProperties: true
+          description: Non-secret create fields for the kind.
+        secretPlaceholder:
+          type: string
+        variables:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              field:
+                type: string
+            required: [key, field]
+        plainVariables:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              hint:
+                type: string
+            required: [key, hint]
+      required: [id, name, category, kind, description, defaults, secretPlaceholder, variables]
     ObjectId:
       type: string
       pattern: ^[a-f0-9]{24}$

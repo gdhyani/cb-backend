@@ -4,6 +4,7 @@ import { authOf } from "../middlewares/auth.middleware.js";
 import * as grantService from "../services/grant.service.js";
 import * as profileService from "../services/profile.service.js";
 import * as resourceService from "../services/resource.service.js";
+import * as resourceTestService from "../services/resource-test.service.js";
 import * as variableService from "../services/variable.service.js";
 import { toObjectId } from "../utils/ids.js";
 import { sendSuccess } from "../utils/response.js";
@@ -117,5 +118,14 @@ export async function updateGrantHandler(req: Request, res: Response, next: Next
     );
   } catch (err) {
     next(toAppError(err, "item.controller.updateGrant: failed to update access grant"));
+  }
+}
+
+export async function testResourceHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const profile = typeof req.body?.profile === "string" ? req.body.profile : undefined;
+    sendSuccess(res, await resourceTestService.testResource(authOf(res).userId, resourceIdOf(req), profile));
+  } catch (err) {
+    next(toAppError(err, "item.controller.testResource: failed to test the connection"));
   }
 }

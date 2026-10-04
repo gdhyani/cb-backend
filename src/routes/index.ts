@@ -6,6 +6,7 @@ import { deviceRoutes } from "./device.routes.js";
 import { environmentRoutes } from "./environment.routes.js";
 import { healthRoutes } from "./health.routes.js";
 import { orgRoutes } from "./org.routes.js";
+import { presetRoutes } from "./preset.routes.js";
 import { projectRoutes } from "./project.routes.js";
 
 export function registerRoutes(app: Express): void {
@@ -18,5 +19,6 @@ export function registerRoutes(app: Express): void {
     orgRoutes,
     projectRoutes,
     environmentRoutes,
+    presetRoutes,
   );
 }

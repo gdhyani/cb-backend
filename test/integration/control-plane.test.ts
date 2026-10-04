@@ -491,3 +491,19 @@ describe("project access (J4: project-wide or per-environment)", () => {
     ).toBe(400);
   });
 });
+
+describe("presets (§10.8)", () => {
+  it("serves provider presets as data, each with a valid kind and suggested variables", async () => {
+    const { owner } = await signupOwner(app);
+    const res = await owner.get("/api/presets");
+    expect(res.status).toBe(200);
+    const ids = res.body.data.map((p: { id: string }) => p.id);
+    expect(ids).toEqual(
+      expect.arrayContaining(["openai", "anthropic", "stripe", "razorpay", "firebase", "aws-s3"]),
+    );
+    const stripe = res.body.data.find((p: { id: string }) => p.id === "stripe");
+    expect(stripe).toMatchObject({ kind: "http", defaults: { redirectHosts: ["api.stripe.com:443"] } });
+    expect(stripe.variables).toEqual([{ key: "STRIPE_SECRET_KEY", field: "key" }]);
+    expect((await request(app).get("/api/presets")).status).toBe(401);
+  });
+});
