@@ -15,6 +15,8 @@ const EnvSchema = z.object({
   MASTER_KEY: base64Key,
   SERVER_SECRET: base64Key,
   DASHBOARD_URL: z.url().default("http://localhost:4201"),
+  /** FR-WH-001: where payment providers reach this backend (webhook URLs); a tunnel URL in development. */
+  PUBLIC_URL: z.url().optional(),
   COOKIE_SECURE: z
     .enum(["true", "false"])
     .default("false")

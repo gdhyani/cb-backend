@@ -9,7 +9,7 @@ import * as deviceService from "../services/device.service.js";
 import { toObjectId } from "../utils/ids.js";
 import { sendSuccess } from "../utils/response.js";
 
-function deviceAuth(res: Response): { userId: string; deviceId: string } {
+export function deviceAuth(res: Response): { userId: string; deviceId: string } {
   const auth = authOf(res);
   if (auth.kind !== "device" || !auth.deviceId) {
     throw new AppError("FORBIDDEN", {

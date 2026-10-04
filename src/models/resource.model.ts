@@ -12,6 +12,8 @@ export const RESOURCE_KINDS = [
   "aws",
   "google-sa",
   "apns",
+  /** Webhook signing secret: central ingress verifies with it, devices get per-device fakes (FR-WH-001). */
+  "webhook",
 ] as const;
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 

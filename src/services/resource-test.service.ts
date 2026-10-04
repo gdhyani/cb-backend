@@ -323,6 +323,16 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
       session.close();
     }
   },
+  /**
+   * No provider API can check a webhook signing secret (only a real delivery can), so the test checks its shape;
+   * the first real webhook proves it (a mismatch shows as a rejected delivery in the dashboard).
+   */
+  async webhook(secret, config) {
+    if (config.provider === "stripe" && !secret.startsWith("whsec_"))
+      return { ok: false, message: "A Stripe signing secret starts with whsec_." };
+    if (secret.trim().length < 8) return { ok: false, message: "The signing secret is too short." };
+    return { ok: true, message: "Signing secret saved; the first webhook from the provider confirms it." };
+  },
 };
 
 /** J2: test credentials that are not saved yet (Save & test, Replace value). No DB access, no audit. */

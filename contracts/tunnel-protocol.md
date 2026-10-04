@@ -118,3 +118,30 @@ The backend feeds the byte stream into an adapter selected by the resource kind:
   `config.changed`) and re-fetches `GET /api/agent/bootstrap` on `config.changed`.
 - The real secret held for a tunnel is cleared when it closes. Credential rotation applies to new
   connections; open tunnels keep their upstream session.
+
+## 6. Agent event stream (`GET /api/agent/events?envId=…`)
+
+Server-sent events for one device + environment: `ready` (on open), `heartbeat` (every 15 s), `config.changed`,
+`access.revoked` and `webhook`. Agents treat **45 s without any bytes** as a dead connection and reconnect;
+every reconnect uses a fresh access token.
+
+### `webhook` (FR-WH-003)
+
+```json
+{ "deliveryId": "…", "generation": 0, "eventId": "evt_…", "provider": "stripe", "type": "payment_intent.succeeded",
+  "path": "/api/webhooks/stripe", "port": null, "headers": { "content-type": "application/json",
+  "stripe-signature": "t=…,v1=…" }, "body": "<base64>" }
+```
+
+- Sent only to the device that created the objects the event names (or that opted in with
+  `POST /api/agent/webhooks/listen`). Headers are signed with **this device's fake** signing secret (fresh
+  timestamp per attempt); the real secret never leaves the backend.
+- The agent posts `body` (bytes unchanged) with `headers` to `http://127.0.0.1:<port><path>`, then calls
+  `POST /api/agent/webhooks/{deliveryId}/ack` with `{ ok, status?, error?, ms? }` (`ok` = the app answered 2xx).
+- At-least-once: pending deliveries are re-sent on every stream open and when no ack arrives within 30 s.
+  Agents remember recent `deliveryId` + `generation` pairs and re-ack a repeat without posting it to the app
+  again; a dashboard Replay bumps `generation`, so it is posted once more. Acks carry the `generation` they answer.
+- No app attached under `cb run` → ack `{ ok: false, noApp: true }` (not a failed attempt). When a `cb run`
+  attaches, the agent calls `POST /api/agent/webhooks/redeliver` with the project and environment.
+- Port: `cb run --webhook-port` → `.cb/project.json` `webhookPort` → `PORT` of the `cb run` command →
+  `port` from the event → 3000.

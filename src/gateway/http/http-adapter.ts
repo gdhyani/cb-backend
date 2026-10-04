@@ -1,12 +1,15 @@
 import http, { type IncomingHttpHeaders } from "node:http";
 import http2 from "node:http2";
 import type { Readable } from "node:stream";
+import { PassThrough } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import zlib from "node:zlib";
 import { request } from "undici";
 import type { LeafCache } from "../../crypto/ca.js";
 import { safeEqual } from "../../crypto/safe-equal.js";
 import { recordAudit } from "../../services/audit.service.js";
 import { fakeApiKey } from "../../services/fakes.service.js";
+import { learnFromResponse, paymentProviderOf } from "../../services/webhook-owner.service.js";
 import { asSocketLike } from "../socket-like.js";
 import type { StreamAdapter, TunnelContext } from "../types.js";
 import { createRedactor } from "./redaction.js";
@@ -25,6 +28,43 @@ export interface HttpResourceConfig {
   fakePrefix?: string;
   basePath?: string;
   redirectHosts?: string[];
+  /** Preset that made the service (stripe, razorpay…); payment providers get webhook owner tracking. */
+  provider?: string;
+}
+
+/** Larger responses are lists or files, never a created payment object. */
+const LEARN_MAX_BYTES = 256 * 1024;
+
+/**
+ * FR-WH-002: copies (never delays) a payment API response so the objects it created can be linked to this
+ * device; decompresses a copy when the SDK asked for gzip/deflate/br.
+ */
+function ownerTap(onBody: (body: Buffer) => void, encoding: string | undefined): PassThrough {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  const tap = new PassThrough();
+  tap.on("data", (c: Buffer) => {
+    size += c.length;
+    if (size <= LEARN_MAX_BYTES) chunks.push(c);
+  });
+  tap.on("end", () => {
+    if (size > LEARN_MAX_BYTES) return;
+    const raw = Buffer.concat(chunks);
+    const limit = { maxOutputLength: LEARN_MAX_BYTES * 8 };
+    // Async: decompressing the copy must never block other connections.
+    const decode: Record<string, (b: Buffer, cb: (err: Error | null, out: Buffer) => void) => void> = {
+      gzip: (b, cb) => zlib.gunzip(b, limit, cb),
+      deflate: (b, cb) => zlib.inflate(b, limit, cb),
+      br: (b, cb) => zlib.brotliDecompress(b, limit, cb),
+    };
+    const fn = encoding ? decode[encoding.toLowerCase()] : undefined;
+    if (!fn) return onBody(raw);
+    fn(raw, (err, out) => {
+      // Undecodable copy: nothing learned, the app's response is unaffected.
+      if (!err) onBody(out);
+    });
+  });
+  return tap;
 }
 
 export const HOP_BY_HOP = new Set([
@@ -132,7 +172,30 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
         for (const [k, v] of Object.entries(up.headers))
           if (!HOP_BY_HOP.has(k) && v !== undefined) out[k] = v;
         (res as http.ServerResponse).writeHead(up.statusCode, out);
-        await pipeline(up.body, createRedactor(ctx.secret), res as unknown as NodeJS.WritableStream);
+        const provider = paymentProviderOf(config);
+        const learn =
+          method === "POST" && provider && up.statusCode >= 200 && up.statusCode < 300
+            ? ownerTap(
+                (body) =>
+                  learnFromResponse(
+                    {
+                      environmentId: ctx.environmentId,
+                      deviceId: ctx.deviceId,
+                      userId: ctx.userId,
+                      provider,
+                    },
+                    path,
+                    up.statusCode,
+                    body,
+                  ),
+                typeof up.headers["content-encoding"] === "string"
+                  ? up.headers["content-encoding"]
+                  : undefined,
+              )
+            : undefined;
+        await (learn
+          ? pipeline(up.body, createRedactor(ctx.secret), learn, res as unknown as NodeJS.WritableStream)
+          : pipeline(up.body, createRedactor(ctx.secret), res as unknown as NodeJS.WritableStream));
         void recordAudit({
           orgId: ctx.orgId,
           actorId: ctx.userId,

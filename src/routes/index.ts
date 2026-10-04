@@ -8,6 +8,7 @@ import { healthRoutes } from "./health.routes.js";
 import { orgRoutes } from "./org.routes.js";
 import { presetRoutes } from "./preset.routes.js";
 import { projectRoutes } from "./project.routes.js";
+import { webhookRoutes } from "./webhook.routes.js";
 
 export function registerRoutes(app: Express): void {
   app.use(
@@ -20,5 +21,6 @@ export function registerRoutes(app: Express): void {
     projectRoutes,
     environmentRoutes,
     presetRoutes,
+    webhookRoutes,
   );
 }
