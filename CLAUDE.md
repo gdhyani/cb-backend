@@ -21,6 +21,8 @@ bootstrap/events endpoints, and the `/tunnel` WebSocket gateway with every proto
 - **No endpoint ever returns stored secret plaintext** (L15, S2) — test-enforced. Secret fields are
   `select: false` in Mongoose.
 - Real secrets are decrypted **per use**, held only as long as needed, **never logged** (FR-GW-005, S9).
+- Upstream URLs are https; plain `http://` only for private/loopback addresses (`src/utils/upstream-url.ts`, PRD v1.26 D11).
+- Adding a key with its service is one call (`POST /api/environments/:envId/services`): tested first, nothing saved on failure.
 - Upstream TLS **always verifies** (FR-GW-004). `UPSTREAM_EXTRA_CA_FILE` is test-only; startup refuses
   it when `NODE_ENV=production` (S11).
 - Fake-credential checks use **constant-time** comparison (FR-CRY-002, S7).
