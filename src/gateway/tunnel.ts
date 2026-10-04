@@ -149,7 +149,10 @@ async function handleTunnel(
   };
 
   try {
-    await assertRuntimeAccess(auth.userId, env);
+    await assertRuntimeAccess(auth.userId, env, {
+      deviceId: auth.deviceId,
+      resourceId: resource._id.toHexString(),
+    });
   } catch (err) {
     const code = err instanceof AppError ? err.code : "INTERNAL_ERROR";
     void recordAudit({ ...audit, action: "tunnel.denied", outcome: "denied", meta: { reason: code } });
@@ -160,7 +163,7 @@ async function handleTunnel(
       return;
     }
     ws.close(
-      code === "ENVIRONMENT_KILLED" ? CloseCode.Revoked : CloseCode.Forbidden,
+      code === "ENVIRONMENT_KILLED" || code === "KILLSWITCH_ACTIVE" ? CloseCode.Revoked : CloseCode.Forbidden,
       closeReason(err instanceof Error ? err.message : "access denied"),
     );
     return;

@@ -383,6 +383,31 @@ describe("revocation (J7, FR-GW-007, S4)", () => {
     listener.close();
   });
 
+  it("J7 a resource kill switch closes a live redis connection within 5 s and blocks new tunnels", async () => {
+    const { token, envId, resources, boot, owner } = await scenario();
+    const listener = await localListener(base, token, { layer: "1", env: envId, resource: resources.cache });
+    const redisUrl = boot.body.data.listeners.find((l: { kind: string }) => l.kind === "redis").env.REDIS_URL;
+    const client = new Redis(fill(redisUrl, listener.port), {
+      maxRetriesPerRequest: 0,
+      retryStrategy: () => null,
+    });
+    client.on("error", () => undefined);
+    await client.set("k", "v");
+    const closed = new Promise<number>((r) => client.once("end", () => r(Date.now())));
+    const orgId = (await owner.get(`/api/environments/${envId}`)).body.data.orgId as string;
+    const startedAt = Date.now();
+    const kill = await owner.post(`/api/orgs/${orgId}/killswitches`, {
+      scope: "resource",
+      targetId: resources.cache,
+      reason: "suspected key leak",
+    });
+    expect(kill.status).toBe(201);
+    expect((await closed) - startedAt).toBeLessThan(5_000);
+    expect(listener.closeCodes).toContain(4410);
+    await owner.delete(`/api/killswitches/${kill.body.data.id}`);
+    listener.close();
+  });
+
   it("J7 temporary access expiry closes tunnels; HTTP then gets 403 cb_access_revoked", async () => {
     const { token, envId, resources, boot, owner, bob } = await scenario(false);
     void boot;

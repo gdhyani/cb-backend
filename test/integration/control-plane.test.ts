@@ -507,3 +507,95 @@ describe("presets (§10.8)", () => {
     expect((await request(app).get("/api/presets")).status).toBe(401);
   });
 });
+
+describe("kill switches, sessions and heartbeat (J7, FR-UI-002)", () => {
+  it("J7 a device kill switch refuses bootstrap until cleared; an org switch stops even owners", async () => {
+    const { owner, orgId } = await signupOwner(app);
+    const project = await owner.post(`/api/orgs/${orgId}/projects`, { name: "Kill" });
+    const projectId = project.body.data.id as string;
+    const dev = await addMember(app, owner, orgId, "Kim");
+    await owner.put(`/api/projects/${projectId}/access/${dev.userId}`, { scope: "project" });
+    const { token, deviceId } = await loginDevice(app, dev.member);
+    const boot = () => cli(app, token).get(`/api/agent/bootstrap?projectId=${projectId}&env=development`);
+    expect((await boot()).status).toBe(200);
+
+    const events: BusEvent[] = [];
+    const stop = bus.subscribe((e) => events.push(e));
+    expect((await owner.post(`/api/orgs/${orgId}/killswitches`, { scope: "device" })).status).toBe(400); // no target
+    expect(
+      (await owner.post(`/api/orgs/${orgId}/killswitches`, { scope: "device", targetId: deviceId })).status,
+    ).toBe(400); // no reason
+    const kill = await owner.post(`/api/orgs/${orgId}/killswitches`, {
+      scope: "device",
+      targetId: deviceId,
+      reason: "laptop reported stolen",
+    });
+    expect(kill.status).toBe(201);
+    expect(kill.body.data).toMatchObject({
+      scope: "device",
+      targetLabel: expect.any(String),
+      clearedAt: null,
+    });
+    expect(events.some((e) => e.type === "access.revoked" && e.scope === "device")).toBe(true);
+    const refused = await boot();
+    expect(refused.status).toBe(403);
+    expect(refused.body.error.code).toBe("KILLSWITCH_ACTIVE");
+    expect(
+      (
+        await owner.post(`/api/orgs/${orgId}/killswitches`, {
+          scope: "device",
+          targetId: deviceId,
+          reason: "again",
+        })
+      ).status,
+    ).toBe(409);
+
+    const cleared = await owner.delete(`/api/killswitches/${kill.body.data.id}`);
+    expect(cleared.body.data.clearedAt).not.toBeNull();
+    expect((await boot()).status).toBe(200);
+
+    const org = await owner.post(`/api/orgs/${orgId}/killswitches`, {
+      scope: "org",
+      reason: "incident response",
+    });
+    const { token: ownerToken } = await loginDevice(app, owner);
+    const ownerBoot = await cli(app, ownerToken).get(
+      `/api/agent/bootstrap?projectId=${projectId}&env=development`,
+    );
+    expect(ownerBoot.body.error.code).toBe("KILLSWITCH_ACTIVE");
+    expect((await dev.member.get(`/api/orgs/${orgId}/killswitches`)).status).toBe(403);
+    await owner.delete(`/api/killswitches/${org.body.data.id}`);
+    stop();
+  });
+
+  it("lists active dashboard sessions (current marked) and revoking one signs that member out", async () => {
+    const { owner, orgId } = await signupOwner(app);
+    const dev = await addMember(app, owner, orgId, "Sam");
+    const sessions = await owner.get(`/api/orgs/${orgId}/sessions`);
+    expect(sessions.status).toBe(200);
+    expect(sessions.body.data.filter((s: { current: boolean }) => s.current)).toHaveLength(1);
+    const devSession = sessions.body.data.find((s: { user: { id: string } }) => s.user.id === dev.userId);
+    expect(devSession).toBeTruthy();
+    expect((await dev.member.get("/api/auth/me")).status).toBe(200);
+    expect((await owner.delete(`/api/sessions/${devSession.id}`)).body.data).toEqual({ revoked: true });
+    expect((await dev.member.get("/api/auth/me")).status).toBe(401);
+  });
+
+  it("agent heartbeat marks the device's agent online with its version and tunnels", async () => {
+    const { owner, orgId } = await signupOwner(app);
+    const { token, deviceId } = await loginDevice(app, owner);
+    const before = (await owner.get(`/api/orgs/${orgId}/devices`)).body.data.find(
+      (d: { id: string }) => d.id === deviceId,
+    );
+    expect(before.agent.online).toBe(false);
+    const beat = await cli(app, token)
+      .post("/api/agent/heartbeat")
+      .send({ version: "0.1.0", activeTunnels: 3 });
+    expect(beat.status).toBe(200);
+    const after = (await owner.get(`/api/orgs/${orgId}/devices`)).body.data.find(
+      (d: { id: string }) => d.id === deviceId,
+    );
+    expect(after.agent).toMatchObject({ online: true, version: "0.1.0", activeTunnels: 3 });
+    expect((await owner.post("/api/agent/heartbeat", { version: "x", activeTunnels: 0 })).status).toBe(403);
+  });
+});

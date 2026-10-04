@@ -2,6 +2,7 @@ import type { Types } from "mongoose";
 import { AppError } from "../errors/app-error.js";
 import { EnvironmentModel } from "../models/environment.model.js";
 import { GrantModel } from "../models/grant.model.js";
+import { KillSwitchModel } from "../models/kill-switch.model.js";
 import { MembershipModel, type Role } from "../models/membership.model.js";
 import { ProjectModel } from "../models/project.model.js";
 
@@ -63,11 +64,33 @@ export async function hasEnvironmentAccess(
   return Boolean(await GrantModel.exists({ userId, ...coveringGrantFilter(env) }));
 }
 
-/** Runtime check for bootstrap and tunnels: membership, kill switch, then access. */
+/** Active kill switches that stop this user/device/environment (and resource, for tunnels). */
+async function activeKillSwitch(
+  userId: string,
+  env: { _id: Types.ObjectId; orgId: Types.ObjectId },
+  extra: { deviceId?: string; resourceId?: string },
+) {
+  const targets: Record<string, unknown>[] = [
+    { scope: "org" },
+    { scope: "environment", targetId: env._id },
+    { scope: "user", targetId: userId },
+  ];
+  if (extra.deviceId) targets.push({ scope: "device", targetId: extra.deviceId });
+  if (extra.resourceId) targets.push({ scope: "resource", targetId: extra.resourceId });
+  return KillSwitchModel.findOne({ orgId: env.orgId, clearedAt: null, $or: targets }).lean();
+}
+
+/** Runtime check for bootstrap and tunnels: environment suspension, kill switches, then access. */
 export async function assertRuntimeAccess(
   userId: string,
   env: { _id: Types.ObjectId; orgId: Types.ObjectId; projectId: Types.ObjectId; killedAt?: Date | null },
+  extra: { deviceId?: string; resourceId?: string } = {},
 ) {
   if (env.killedAt) throw new AppError("ENVIRONMENT_KILLED");
+  const kill = await activeKillSwitch(userId, env, extra);
+  if (kill)
+    throw new AppError("KILLSWITCH_ACTIVE", {
+      message: `Access is stopped by a kill switch: ${kill.reason}`,
+    });
   if (!(await hasEnvironmentAccess(userId, env))) throw new AppError("NO_ACCESS");
 }

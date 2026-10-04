@@ -38,6 +38,231 @@ tags:
   - name: Agent
     description: Agent bootstrap snapshot and event stream (device token).
 paths:
+  /api/orgs/{orgId}/sessions:
+    get:
+      operationId: listSessions
+      tags:
+        - Orgs
+      summary: Active dashboard sessions of the organization's members (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Session"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/sessions/{sessionId}:
+    delete:
+      operationId: revokeSession
+      tags:
+        - Orgs
+      summary: Sign a dashboard session out (own, or a member's as admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/sessionId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          revoked:
+                            type: boolean
+                            const: true
+                        required:
+                          - revoked
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/orgs/{orgId}/killswitches:
+    get:
+      operationId: listKillSwitches
+      tags:
+        - Orgs
+      summary: Kill switches, active first (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/KillSwitch"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: activateKillSwitch
+      tags:
+        - Orgs
+      summary: Stop access at org, environment, resource, user or device scope (admin, typed reason; J7)
+      description: Affected tunnels close within seconds with protocol-native errors; new sessions are refused (KILLSWITCH_ACTIVE) until cleared.
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActivateKillSwitchBody"
+      responses:
+        "201":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/KillSwitch"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/killswitches/{killSwitchId}:
+    delete:
+      operationId: clearKillSwitch
+      tags:
+        - Orgs
+      summary: Clear a kill switch (admin); agents restore access automatically
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/killSwitchId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/KillSwitch"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/agent/heartbeat:
+    post:
+      operationId: agentHeartbeat
+      tags:
+        - Agent
+      summary: Agent heartbeat with version and open tunnels (about once a minute)
+      security:
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HeartbeatBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          ok:
+                            type: boolean
+                            const: true
+                        required:
+                          - ok
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /api/presets:
     get:
       operationId: listPresets
@@ -2300,6 +2525,18 @@ components:
       scheme: bearer
       description: CLI device token (prefix `cbd_`) from the device-code flow. Used by `/api/cli/*` and `/api/agent/*`.
   parameters:
+    sessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/ObjectId"
+    killSwitchId:
+      name: killSwitchId
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/ObjectId"
     CsrfHeader:
       name: x-cb-csrf
       in: header
@@ -2482,6 +2719,81 @@ components:
               statusCode: 410
               correlationId: c0ffee12-0000-4000-8000-000000000000
   schemas:
+    Session:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/ObjectId"
+        user:
+          $ref: "#/components/schemas/User"
+        userAgent:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        lastSeenAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        expiresAt:
+          type: string
+          format: date-time
+        current:
+          type: boolean
+          description: The session making this request.
+      required: [id, user, userAgent, createdAt, lastSeenAt, expiresAt, current]
+    KillSwitch:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/ObjectId"
+        scope:
+          type: string
+          enum: [org, environment, resource, user, device]
+        targetId:
+          oneOf:
+            - $ref: "#/components/schemas/ObjectId"
+            - type: "null"
+        targetLabel:
+          type: string
+        reason:
+          type: string
+        createdBy:
+          $ref: "#/components/schemas/ObjectId"
+        createdAt:
+          type: string
+          format: date-time
+        clearedAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: "null"
+      required: [id, scope, targetId, targetLabel, reason, createdBy, createdAt, clearedAt]
+    ActivateKillSwitchBody:
+      type: object
+      properties:
+        scope:
+          type: string
+          enum: [org, environment, resource, user, device]
+        targetId:
+          $ref: "#/components/schemas/ObjectId"
+          description: Required unless scope is org.
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 300
+      required: [scope, reason]
+    HeartbeatBody:
+      type: object
+      properties:
+        version:
+          type: string
+          maxLength: 40
+        activeTunnels:
+          type: integer
+          minimum: 0
+      required: [version, activeTunnels]
     ResourceTestResult:
       type: object
       properties:
@@ -2937,6 +3249,24 @@ components:
           format: date-time
         revoked:
           type: boolean
+        agent:
+          type: object
+          description: From the agent heartbeat; online = reported within the last 3 minutes.
+          properties:
+            online:
+              type: boolean
+            version:
+              oneOf:
+                - type: string
+                - type: "null"
+            activeTunnels:
+              type: integer
+            seenAt:
+              oneOf:
+                - type: string
+                  format: date-time
+                - type: "null"
+          required: [online, version, activeTunnels, seenAt]
       required:
         - id
         - name
@@ -2945,6 +3275,7 @@ components:
         - lastSeenAt
         - createdAt
         - revoked
+        - agent
     Org:
       type: object
       properties:

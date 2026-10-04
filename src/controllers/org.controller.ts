@@ -6,7 +6,9 @@ import * as auditService from "../services/audit.service.js";
 import * as deviceService from "../services/device.service.js";
 import * as grantService from "../services/grant.service.js";
 import * as inviteService from "../services/invite.service.js";
+import * as killSwitchService from "../services/kill-switch.service.js";
 import * as orgService from "../services/org.service.js";
+import * as sessionService from "../services/session.service.js";
 import * as statsService from "../services/stats.service.js";
 import { toObjectId } from "../utils/ids.js";
 import { PaginationQuery } from "../utils/pagination.js";
@@ -130,5 +132,66 @@ export async function getMemberAccessHandler(req: Request, res: Response, next: 
     sendSuccess(res, await grantService.listMemberAccess(authOf(res).userId, orgIdOf(req), userId));
   } catch (err) {
     next(toAppError(err, "org.controller.getMemberAccess: failed to load member access"));
+  }
+}
+
+export async function listSessionsHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const auth = authOf(res);
+    sendSuccess(res, await sessionService.listOrgSessions(auth.userId, auth.sessionId, orgIdOf(req)));
+  } catch (err) {
+    next(toAppError(err, "org.controller.listSessions: failed to list sessions"));
+  }
+}
+
+export async function revokeSessionHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    await sessionService.revokeSession(authOf(res).userId, toObjectId(req.params.sessionId, "Session"));
+    sendSuccess(res, { revoked: true });
+  } catch (err) {
+    next(toAppError(err, "org.controller.revokeSession: failed to revoke session"));
+  }
+}
+
+export async function listKillSwitchesHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    sendSuccess(res, await killSwitchService.listKillSwitches(authOf(res).userId, orgIdOf(req)));
+  } catch (err) {
+    next(toAppError(err, "org.controller.listKillSwitches: failed to list kill switches"));
+  }
+}
+
+export async function activateKillSwitchHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const input = killSwitchService.ActivateKillSwitchBody.parse(req.body);
+    sendSuccess(
+      res,
+      await killSwitchService.activateKillSwitch(authOf(res).userId, orgIdOf(req), input),
+      201,
+    );
+  } catch (err) {
+    next(toAppError(err, "org.controller.activateKillSwitch: failed to activate kill switch"));
+  }
+}
+
+export async function clearKillSwitchHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    sendSuccess(
+      res,
+      await killSwitchService.clearKillSwitch(
+        authOf(res).userId,
+        toObjectId(req.params.killSwitchId, "Kill switch"),
+      ),
+    );
+  } catch (err) {
+    next(toAppError(err, "org.controller.clearKillSwitch: failed to clear kill switch"));
   }
 }

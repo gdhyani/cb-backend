@@ -44,12 +44,15 @@ export async function resolveDeviceToken(token: string): Promise<AuthContext | u
 }
 
 async function resolveWebSession(token: string): Promise<AuthContext | undefined> {
+  const now = new Date();
   const session = await WebSessionModel.findOne({
     tokenHash: hashToken(token),
     revokedAt: null,
-    expiresAt: { $gt: new Date() },
+    expiresAt: { $gt: now },
   }).lean();
   if (!session) return undefined;
+  if (!session.lastSeenAt || now.getTime() - session.lastSeenAt.getTime() > TOUCH_INTERVAL_MS)
+    await WebSessionModel.updateOne({ _id: session._id }, { lastSeenAt: now });
   const user = await UserModel.findOne({ _id: session.userId, disabledAt: null }).select("_id").lean();
   if (!user) return undefined;
   return { userId: session.userId.toHexString(), kind: "web", sessionId: session._id.toHexString() };

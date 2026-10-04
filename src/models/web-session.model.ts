@@ -7,6 +7,7 @@ const WebSessionSchema = new Schema(
     userAgent: { type: String, default: "" },
     expiresAt: { type: Date, required: true, index: { expires: 0 } },
     revokedAt: { type: Date, default: null },
+    lastSeenAt: { type: Date, default: null },
   },
   { timestamps: true },
 );
