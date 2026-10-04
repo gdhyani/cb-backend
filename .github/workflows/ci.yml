@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Install redis-server (used by the data-plane tests)
+        run: sudo apt-get update -q && sudo apt-get install -y -q redis-server
+      # Test-only credentials, generated per run and never stored anywhere.
+      - name: Generate throwaway test-service passwords
+        run: |
+          echo "CB_TEST_DB_PASSWORD=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+          echo "CB_TEST_REDIS_PASSWORD=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+      - name: Start Postgres, MySQL, Redis, Mailpit and S3 test services
+        run: docker compose -f docker-compose.test.yml up -d
+      - run: npm ci
+      - run: npx biome check src test
+      - run: npx tsc --noEmit
+      - name: Wait for test services
+        run: |
+          for i in $(seq 1 60); do
+            pg=$(docker compose -f docker-compose.test.yml exec -T postgres-auth pg_isready -q && echo ok || true)
+            my=$(docker compose -f docker-compose.test.yml exec -T mysql-auth mysqladmin ping -h 127.0.0.1 --silent 2>/dev/null && echo ok || true)
+            s3=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9010/ || true)
+            if [ "$pg" = ok ] && [ "$my" = ok ] && [ "$s3" != "000" ]; then echo "services ready"; exit 0; fi
+            sleep 2
+          done
+          docker compose -f docker-compose.test.yml ps
+          exit 1
+      - run: npx vitest run
+      - name: Service logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.test.yml logs --tail 50
