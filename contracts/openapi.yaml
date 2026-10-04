@@ -1,0 +1,4232 @@
+# cb API contract. Owned by cb-backend; consumers run `npm run sync:contract`.
+openapi: 3.1.0
+x-contract-version: 1.0.0
+info:
+  title: cb API
+  version: 1.0.0
+  description: |-
+    REST API of cb-backend, consumed by cb-dashboard (session cookie) and cb-env (device bearer token).
+
+    Every success response is `{ success: true, data, meta: { correlationId } }`; paginated lists add
+    `meta.pagination`. Every error is `ErrorBody` (PRD §12.7). Stored secrets are write-only: credential
+    fields appear only in request bodies and are never returned. The `/tunnel` WebSocket is specified in
+    `tunnel-protocol.md`.
+servers:
+  - url: http://localhost:4200
+    description: Local development
+tags:
+  - name: Health
+    description: Liveness and dependency health.
+  - name: Auth
+    description: Dashboard signup, login, sessions and invites (FR-AUTH-001, FR-AUTH-005).
+  - name: Devices
+    description: CLI device-code login and device management (FR-AUTH-002).
+  - name: Orgs
+    description: Organizations, members, invites and stats.
+  - name: Projects
+    description: Projects inside an organization.
+  - name: Environments
+    description: Environments of a project, including the kill switch.
+  - name: Resources
+    description: Brokered resources and their credential profiles (write-only secrets).
+  - name: Variables
+    description: Environment variables and the developer preview.
+  - name: Access
+    description: Grants and project access (J4, J7).
+  - name: Audit
+    description: Audit trail (J8).
+  - name: Agent
+    description: Agent bootstrap snapshot and event stream (device token).
+paths:
+  /api/health:
+    get:
+      operationId: getHealth
+      tags:
+        - Health
+      summary: Service health
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Health"
+                    required:
+                      - data
+  /api/auth/signup:
+    post:
+      operationId: signup
+      tags:
+        - Auth
+      summary: Create an account and organization (J1)
+      description: Sets the `cb_session` cookie (httpOnly, SameSite=Lax). FR-AUTH-001.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignupBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Me"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/auth/login:
+    post:
+      operationId: login
+      tags:
+        - Auth
+      summary: Log in to the dashboard
+      description: Sets the `cb_session` cookie. Wrong email or password → 401 INVALID_CREDENTIALS.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Me"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/auth/logout:
+    post:
+      operationId: logout
+      tags:
+        - Auth
+      summary: Log out (revokes the web session and clears the cookie)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          loggedOut:
+                            type: boolean
+                            const: true
+                        required:
+                          - loggedOut
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/auth/me:
+    get:
+      operationId: getMe
+      tags:
+        - Auth
+      summary: Current user and memberships
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Me"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/invites/{token}:
+    get:
+      operationId: previewInvite
+      tags:
+        - Auth
+      summary: Preview an invite before accepting it
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/inviteToken"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/InvitePreview"
+                    required:
+                      - data
+        "410":
+          $ref: "#/components/responses/Gone"
+  /api/auth/accept-invite:
+    post:
+      operationId: acceptInvite
+      tags:
+        - Auth
+      summary: Accept an invite (FR-AUTH-005)
+      description: With a session cookie the current user joins the organization. Without one, name, email and password create the account and a session cookie is set.
+      security:
+        - {}
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AcceptInviteBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/AcceptInviteResult"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
+  /api/agent/bootstrap:
+    get:
+      operationId: getBootstrap
+      tags:
+        - Agent
+      summary: Snapshot for one project environment (FR-AGT-003)
+      description: Requires a CLI device token (403 FORBIDDEN for dashboard sessions).
+      security:
+        - deviceToken: []
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          description: Project id or slug.
+          schema:
+            type: string
+            minLength: 1
+        - name: env
+          in: query
+          required: true
+          description: Environment name.
+          schema:
+            type: string
+            minLength: 1
+        - name: orgId
+          in: query
+          required: false
+          description: Disambiguates a slug across organizations.
+          schema:
+            type: string
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Bootstrap"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/agent/events:
+    get:
+      operationId: streamAgentEvents
+      tags:
+        - Agent
+      summary: Server-sent events for one environment (FR-EVT-002)
+      description: |-
+        Requires a CLI device token. The stream is `text/event-stream`; each message is `event: <name>` + `data: <json>`.
+
+        | event | data | meaning |
+        |---|---|---|
+        | `ready` | `{"environmentId":"…"}` | Sent once when the stream opens. |
+        | `config.changed` | `{"environmentId":"…"}` | The snapshot changed; re-fetch `/api/agent/bootstrap`. |
+        | `access.revoked` | `{"scope":"grant\|device\|membership\|environment\|project","reason":"…"}` | Access is gone (re-checked against the database before sending). |
+        | `heartbeat` | `{}` | Every 15 s. |
+      security:
+        - deviceToken: []
+      parameters:
+        - name: envId
+          in: query
+          required: true
+          description: Environment id.
+          schema:
+            $ref: "#/components/schemas/ObjectId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: Event stream (stays open).
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                examples:
+                  - |+
+                    event: ready
+                    data: {"environmentId":"665f1c2ab3e4d5f6a7b8c9d0"}
+
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/cli/device/start:
+    post:
+      operationId: startDeviceAuth
+      tags:
+        - Devices
+      summary: Start the device-code login (FR-AUTH-002 step 1)
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartDeviceBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/DeviceStart"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/cli/device/token:
+    post:
+      operationId: pollDeviceToken
+      tags:
+        - Devices
+      summary: Poll for the device token (FR-AUTH-002 step 3)
+      description: 400 DEVICE_AUTH_PENDING until approved; 410 DEVICE_CODE_EXPIRED after expiry; 404 for unknown or consumed codes. The token is returned exactly once.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PollDeviceBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/DeviceTokenResult"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "410":
+          $ref: "#/components/responses/Gone"
+  /api/cli/device/approve:
+    post:
+      operationId: approveDeviceAuth
+      tags:
+        - Devices
+      summary: Approve a device code from the dashboard (FR-AUTH-002 step 2)
+      description: Dashboard session only (403 for device tokens).
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveDeviceBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/DeviceApproval"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/cli/whoami:
+    get:
+      operationId: whoami
+      tags:
+        - Devices
+      summary: Identity of the caller
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WhoAmI"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/cli/logout:
+    post:
+      operationId: cliLogout
+      tags:
+        - Devices
+      summary: Revoke the calling device's token
+      description: Device token only (403 for dashboard sessions).
+      security:
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          loggedOut:
+                            type: boolean
+                            const: true
+                        required:
+                          - loggedOut
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/me/devices:
+    get:
+      operationId: listMyDevices
+      tags:
+        - Devices
+      summary: My active devices
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Device"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/devices/{deviceId}:
+    delete:
+      operationId: revokeDevice
+      tags:
+        - Devices
+      summary: Revoke a device (own, or a member's as admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/deviceId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          revoked:
+                            type: boolean
+                            const: true
+                        required:
+                          - revoked
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/orgs:
+    get:
+      operationId: listOrgs
+      tags:
+        - Orgs
+      summary: My organizations
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Org"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/orgs/{orgId}:
+    get:
+      operationId: getOrg
+      tags:
+        - Orgs
+      summary: One organization
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Org"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/orgs/{orgId}/members:
+    get:
+      operationId: listMembers
+      tags:
+        - Orgs
+      summary: Members of an organization
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Member"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/orgs/{orgId}/members/{userId}:
+    patch:
+      operationId: updateMember
+      tags:
+        - Orgs
+      summary: Change a member's role (admin; owner role changes need an owner)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/userId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRoleBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Member"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      operationId: removeMember
+      tags:
+        - Orgs
+      summary: Remove a member (admin, or yourself); revokes their grants
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/userId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          removed:
+                            type: boolean
+                            const: true
+                        required:
+                          - removed
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/orgs/{orgId}/members/{userId}/access:
+    get:
+      operationId: getMemberAccess
+      tags:
+        - Access
+      summary: Everything one member can reach, grouped by project (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/userId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/MemberAccess"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/orgs/{orgId}/invites:
+    get:
+      operationId: listInvites
+      tags:
+        - Orgs
+      summary: Pending invites (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Invite"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createInvite
+      tags:
+        - Orgs
+      summary: Create an invite link (admin; owners only for the owner role)
+      description: The body is optional; an empty body invites a developer.
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInviteBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CreatedInvite"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/orgs/{orgId}/invites/{inviteId}:
+    delete:
+      operationId: revokeInvite
+      tags:
+        - Orgs
+      summary: Revoke an invite (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/inviteId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          revoked:
+                            type: boolean
+                            const: true
+                        required:
+                          - revoked
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/orgs/{orgId}/devices:
+    get:
+      operationId: listOrgDevices
+      tags:
+        - Devices
+      summary: Active devices of all members (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Device"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/orgs/{orgId}/audit:
+    get:
+      operationId: listAudit
+      tags:
+        - Audit
+      summary: Audit trail, newest first (admin, paginated)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: action
+          in: query
+          required: false
+          description: Action prefix, e.g. `grant.` (ignored when category is set).
+          schema:
+            type: string
+        - name: category
+          in: query
+          required: false
+          description: Unknown values are ignored.
+          schema:
+            $ref: "#/components/schemas/AuditCategory"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/AuditEvent"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/orgs/{orgId}/stats:
+    get:
+      operationId: getOrgStats
+      tags:
+        - Orgs
+      summary: Dashboard charts for the last 14 days
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/OrgStats"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/orgs/{orgId}/projects:
+    get:
+      operationId: listProjects
+      tags:
+        - Projects
+      summary: Projects of an organization
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Project"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createProject
+      tags:
+        - Projects
+      summary: Create a project with its environments (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Project"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/orgs/{orgId}/projects/{idOrSlug}:
+    get:
+      operationId: findProject
+      tags:
+        - Projects
+      summary: Find a project by id or slug (used by the CLI)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/idOrSlug"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Project"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/projects/{projectId}:
+    get:
+      operationId: getProject
+      tags:
+        - Projects
+      summary: One project
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/projectId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Project"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateProject
+      tags:
+        - Projects
+      summary: Rename or describe a project (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/projectId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProjectBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Project"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteProject
+      tags:
+        - Projects
+      summary: Delete a project, its environments, resources and variables (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/projectId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          deleted:
+                            type: boolean
+                            const: true
+                        required:
+                          - deleted
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/projects/{projectId}/environments:
+    get:
+      operationId: listEnvironments
+      tags:
+        - Environments
+      summary: Environments of a project
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/projectId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Environment"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createEnvironment
+      tags:
+        - Environments
+      summary: Create an environment (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/projectId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEnvironmentBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Environment"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/projects/{projectId}/access:
+    get:
+      operationId: getAccessMatrix
+      tags:
+        - Access
+      summary: Members × environments with active grants (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/projectId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/AccessMatrix"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/projects/{projectId}/access/{userId}:
+    put:
+      operationId: setProjectAccess
+      tags:
+        - Access
+      summary: Set a developer's complete access to a project (J4)
+      description: Grants no longer wanted are revoked; matching ones are kept. Owners and admins already have access (400).
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/projectId"
+        - $ref: "#/components/parameters/userId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetProjectAccessBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Grant"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: removeProjectAccess
+      tags:
+        - Access
+      summary: Remove a person's access to the whole project (J7)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/projectId"
+        - $ref: "#/components/parameters/userId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          revoked:
+                            type: integer
+                            minimum: 0
+                            description: Number of grants revoked.
+                        required:
+                          - revoked
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/environments/{envId}:
+    get:
+      operationId: getEnvironment
+      tags:
+        - Environments
+      summary: One environment
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/envId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Environment"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateEnvironment
+      tags:
+        - Environments
+      summary: Rename, kill or revive an environment (admin; J7 kill switch)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/envId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateEnvironmentBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Environment"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      operationId: deleteEnvironment
+      tags:
+        - Environments
+      summary: Delete an environment (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/envId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          deleted:
+                            type: boolean
+                            const: true
+                        required:
+                          - deleted
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/environments/{envId}/resources:
+    get:
+      operationId: listResources
+      tags:
+        - Resources
+      summary: Resources of an environment (no credentials)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/envId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Resource"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createResource
+      tags:
+        - Resources
+      summary: Create a resource (admin); credentials are write-only
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/envId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateResourceBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Resource"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/environments/{envId}/variables:
+    get:
+      operationId: listVariables
+      tags:
+        - Variables
+      summary: Variables of an environment
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/envId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Variable"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createVariable
+      tags:
+        - Variables
+      summary: Create a variable (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/envId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVariableBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Variable"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/environments/{envId}/preview:
+    get:
+      operationId: previewEnvironment
+      tags:
+        - Variables
+      summary: What a given member's app would see (admin; J3)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/envId"
+        - name: userId
+          in: query
+          required: true
+          description: Member to preview as.
+          schema:
+            $ref: "#/components/schemas/ObjectId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Preview"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/environments/{envId}/grants:
+    post:
+      operationId: createGrant
+      tags:
+        - Access
+      summary: Grant one environment to a member (admin; J4)
+      description: Re-granting replaces the previous expiry (and profiles, when given).
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/envId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGrantBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Grant"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/resources/{resourceId}:
+    patch:
+      operationId: updateResource
+      tags:
+        - Resources
+      summary: Update or rotate a resource (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/resourceId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateResourceBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Resource"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteResource
+      tags:
+        - Resources
+      summary: Delete a resource with its variables and profiles (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/resourceId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          deleted:
+                            type: boolean
+                            const: true
+                        required:
+                          - deleted
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/resources/{resourceId}/profiles:
+    get:
+      operationId: listProfiles
+      tags:
+        - Resources
+      summary: Credential profiles of a resource ("default" first)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/resourceId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Profile"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createProfile
+      tags:
+        - Resources
+      summary: Create a credential profile (admin); credentials are write-only
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/resourceId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProfileBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Profile"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/resources/{resourceId}/profiles/{name}:
+    put:
+      operationId: rotateProfile
+      tags:
+        - Resources
+      summary: Rotate a credential profile (admin)
+      description: Takes effect on the next connection; live tunnels keep their session.
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/resourceId"
+        - $ref: "#/components/parameters/profileName"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProfileCredentialsBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Profile"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteProfile
+      tags:
+        - Resources
+      summary: Delete a credential profile (admin; 409 while assigned in a grant)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/resourceId"
+        - $ref: "#/components/parameters/profileName"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          deleted:
+                            type: boolean
+                            const: true
+                        required:
+                          - deleted
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/variables/{variableId}:
+    patch:
+      operationId: updateVariable
+      tags:
+        - Variables
+      summary: Update a variable (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/variableId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateVariableBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Variable"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      operationId: deleteVariable
+      tags:
+        - Variables
+      summary: Delete a variable (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/variableId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          deleted:
+                            type: boolean
+                            const: true
+                        required:
+                          - deleted
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/grants/{grantId}:
+    patch:
+      operationId: updateGrant
+      tags:
+        - Access
+      summary: Change a grant's expiry or credential profiles (admin)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/grantId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateGrantBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Grant"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: revokeGrant
+      tags:
+        - Access
+      summary: Revoke a grant now; live tunnels close (FR-GW-007)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/grantId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          revoked:
+                            type: boolean
+                            const: true
+                        required:
+                          - revoked
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: cb_session
+      description: "Dashboard session (httpOnly, SameSite=Lax). Mutating requests must also send `x-cb-csrf: 1` (see the CsrfHeader parameter)."
+    deviceToken:
+      type: http
+      scheme: bearer
+      description: CLI device token (prefix `cbd_`) from the device-code flow. Used by `/api/cli/*` and `/api/agent/*`.
+  parameters:
+    CsrfHeader:
+      name: x-cb-csrf
+      in: header
+      required: true
+      description: Must be `1` on every mutating request authenticated with the session cookie (otherwise 403 CSRF_REQUIRED). Ignored for device bearer tokens.
+      schema:
+        type: string
+        const: "1"
+    CorrelationId:
+      name: x-correlation-id
+      in: header
+      required: false
+      description: Optional; generated when absent and echoed in the response header and meta.
+      schema:
+        type: string
+    orgId:
+      name: orgId
+      in: path
+      required: true
+      description: Organization id
+      schema:
+        $ref: "#/components/schemas/ObjectId"
+    userId:
+      name: userId
+      in: path
+      required: true
+      description: User id
+      schema:
+        $ref: "#/components/schemas/ObjectId"
+    inviteId:
+      name: inviteId
+      in: path
+      required: true
+      description: Invite id
+      schema:
+        $ref: "#/components/schemas/ObjectId"
+    projectId:
+      name: projectId
+      in: path
+      required: true
+      description: Project id
+      schema:
+        $ref: "#/components/schemas/ObjectId"
+    envId:
+      name: envId
+      in: path
+      required: true
+      description: Environment id
+      schema:
+        $ref: "#/components/schemas/ObjectId"
+    resourceId:
+      name: resourceId
+      in: path
+      required: true
+      description: Resource id
+      schema:
+        $ref: "#/components/schemas/ObjectId"
+    variableId:
+      name: variableId
+      in: path
+      required: true
+      description: Variable id
+      schema:
+        $ref: "#/components/schemas/ObjectId"
+    grantId:
+      name: grantId
+      in: path
+      required: true
+      description: Grant id
+      schema:
+        $ref: "#/components/schemas/ObjectId"
+    deviceId:
+      name: deviceId
+      in: path
+      required: true
+      description: Device id
+      schema:
+        $ref: "#/components/schemas/ObjectId"
+    idOrSlug:
+      name: idOrSlug
+      in: path
+      required: true
+      description: Project id (24 hex) or slug.
+      schema:
+        type: string
+    profileName:
+      name: name
+      in: path
+      required: true
+      description: Credential profile name.
+      schema:
+        type: string
+    inviteToken:
+      name: token
+      in: path
+      required: true
+      description: Invite token from the invite link.
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: VALIDATION_FAILED (or DEVICE_AUTH_PENDING on the device poll)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            success: false
+            error:
+              code: VALIDATION_FAILED
+              message: The request is invalid.
+              statusCode: 400
+              details:
+                - path: name
+                  message: "Too small: expected string to have >=1 characters"
+              correlationId: c0ffee12-0000-4000-8000-000000000000
+    Unauthorized:
+      description: UNAUTHORIZED or INVALID_CREDENTIALS
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            success: false
+            error:
+              code: UNAUTHORIZED
+              message: Authentication is required.
+              statusCode: 401
+              correlationId: c0ffee12-0000-4000-8000-000000000000
+    Forbidden:
+      description: FORBIDDEN, CSRF_REQUIRED, NO_ACCESS or ENVIRONMENT_KILLED
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            success: false
+            error:
+              code: FORBIDDEN
+              message: You do not have access to this resource.
+              statusCode: 403
+              correlationId: c0ffee12-0000-4000-8000-000000000000
+    NotFound:
+      description: NOT_FOUND (malformed ids are also reported as not found)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            success: false
+            error:
+              code: NOT_FOUND
+              message: The requested resource was not found.
+              statusCode: 404
+              correlationId: c0ffee12-0000-4000-8000-000000000000
+    Conflict:
+      description: CONFLICT, EMAIL_TAKEN or LAST_OWNER
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            success: false
+            error:
+              code: CONFLICT
+              message: The resource already exists or conflicts with another.
+              statusCode: 409
+              correlationId: c0ffee12-0000-4000-8000-000000000000
+    Gone:
+      description: INVITE_INVALID or DEVICE_CODE_EXPIRED
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            success: false
+            error:
+              code: INVITE_INVALID
+              message: This invite link is invalid, already used or expired.
+              statusCode: 410
+              correlationId: c0ffee12-0000-4000-8000-000000000000
+  schemas:
+    ObjectId:
+      type: string
+      pattern: ^[a-f0-9]{24}$
+      examples:
+        - 665f1c2ab3e4d5f6a7b8c9d0
+    Role:
+      type: string
+      enum:
+        - owner
+        - admin
+        - developer
+    ResourceKind:
+      type: string
+      enum:
+        - mongodb
+        - redis
+        - postgres
+        - mysql
+        - smtp
+        - http
+        - oauth
+        - aws
+        - google-sa
+        - apns
+    VariableType:
+      type: string
+      enum:
+        - plain
+        - generated
+        - visible
+        - brokered
+    GeneratedFormat:
+      type: string
+      enum:
+        - hex:32
+        - hex:64
+        - base64:32
+        - base64url:32
+        - alnum:32
+        - alnum:48
+        - uuid
+    AuthScheme:
+      type: string
+      enum:
+        - bearer
+        - x-api-key
+        - basic-password
+    EnvName:
+      type: string
+      pattern: ^[a-z][a-z0-9-]{0,30}$
+      description: Lowercase letters, digits and dashes (input is trimmed and lowercased).
+      examples:
+        - development
+    AuditCategory:
+      type: string
+      enum:
+        - team
+        - access
+        - config
+        - security
+        - runtime
+    Meta:
+      type: object
+      properties:
+        correlationId:
+          type: string
+      required:
+        - correlationId
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        pageSize:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+        totalPages:
+          type: integer
+          minimum: 0
+        hasNext:
+          type: boolean
+        hasPrev:
+          type: boolean
+      required:
+        - page
+        - pageSize
+        - total
+        - totalPages
+        - hasNext
+        - hasPrev
+    Envelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          const: true
+        data: {}
+        meta:
+          $ref: "#/components/schemas/Meta"
+      required:
+        - success
+        - data
+        - meta
+    PaginatedEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: array
+          items: {}
+        meta:
+          type: object
+          properties:
+            correlationId:
+              type: string
+            pagination:
+              $ref: "#/components/schemas/Pagination"
+          required:
+            - correlationId
+            - pagination
+      required:
+        - success
+        - data
+        - meta
+    ErrorDetail:
+      type: object
+      properties:
+        path:
+          type: string
+        message:
+          type: string
+      required:
+        - path
+        - message
+    ErrorBody:
+      type: object
+      properties:
+        success:
+          type: boolean
+          const: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: SCREAMING_SNAKE_CASE code from the error catalog.
+              examples:
+                - NOT_FOUND
+            message:
+              type: string
+            statusCode:
+              type: integer
+            details:
+              type: array
+              items:
+                $ref: "#/components/schemas/ErrorDetail"
+            correlationId:
+              type: string
+          required:
+            - code
+            - message
+            - statusCode
+            - correlationId
+      required:
+        - success
+        - error
+    Health:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+            - degraded
+        uptimeSec:
+          type: integer
+        version:
+          type: string
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+            enum:
+              - up
+              - down
+      required:
+        - status
+        - uptimeSec
+        - version
+        - checks
+    User:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/ObjectId"
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+          examples:
+            - dev@example.com
+      required:
+        - id
+        - name
+        - email
+    Me:
+      type: object
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        memberships:
+          type: array
+          items:
+            type: object
+            properties:
+              orgId:
+                $ref: "#/components/schemas/ObjectId"
+              orgName:
+                type: string
+              role:
+                $ref: "#/components/schemas/Role"
+            required:
+              - orgId
+              - orgName
+              - role
+      required:
+        - user
+        - memberships
+    WhoAmI:
+      allOf:
+        - $ref: "#/components/schemas/Me"
+        - type: object
+          properties:
+            deviceId:
+              oneOf:
+                - $ref: "#/components/schemas/ObjectId"
+                - type: "null"
+          required:
+            - deviceId
+          description: deviceId is null when called with a dashboard session.
+    InvitePreview:
+      type: object
+      properties:
+        orgName:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
+        email:
+          oneOf:
+            - type: string
+            - type: "null"
+        expiresAt:
+          type: string
+          format: date-time
+      required:
+        - orgName
+        - role
+        - email
+        - expiresAt
+    AcceptInviteResult:
+      type: object
+      properties:
+        orgId:
+          $ref: "#/components/schemas/ObjectId"
+        me:
+          $ref: "#/components/schemas/Me"
+      required:
+        - orgId
+        - me
+    Invite:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/ObjectId"
+        role:
+          $ref: "#/components/schemas/Role"
+        email:
+          oneOf:
+            - type: string
+            - type: "null"
+        expiresAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - role
+        - email
+        - expiresAt
+        - createdAt
+    CreatedInvite:
+      allOf:
+        - $ref: "#/components/schemas/Invite"
+        - type: object
+          properties:
+            token:
+              type: string
+              description: One-time invite token, returned only here.
+              examples:
+                - cbi_example
+            url:
+              type: string
+              format: uri
+              description: Dashboard link to share with the invitee.
+          required:
+            - token
+            - url
+    DeviceStart:
+      type: object
+      properties:
+        deviceCode:
+          type: string
+          description: Secret polling code for the CLI.
+          examples:
+            - cbdc_example
+        userCode:
+          type: string
+          pattern: ^[A-Z2-9]{4}-[A-Z2-9]{4}$
+          examples:
+            - ABCD-EFGH
+        verificationUrl:
+          type: string
+          format: uri
+        interval:
+          type: integer
+          description: Seconds between polls.
+        expiresIn:
+          type: integer
+          description: Seconds until the code expires.
+      required:
+        - deviceCode
+        - userCode
+        - verificationUrl
+        - interval
+        - expiresIn
+    DeviceTokenResult:
+      type: object
+      properties:
+        token:
+          type: string
+          description: Device bearer token (prefix cbd_), returned exactly once.
+          examples:
+            - cbd_example
+        device:
+          type: object
+          properties:
+            id:
+              $ref: "#/components/schemas/ObjectId"
+            name:
+              type: string
+          required:
+            - id
+            - name
+        user:
+          $ref: "#/components/schemas/User"
+      required:
+        - token
+        - device
+        - user
+    DeviceApproval:
+      type: object
+      properties:
+        deviceName:
+          type: string
+        os:
+          type: string
+      required:
+        - deviceName
+        - os
+    Device:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/ObjectId"
+        name:
+          type: string
+        os:
+          type: string
+        user:
+          $ref: "#/components/schemas/User"
+        lastSeenAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        createdAt:
+          type: string
+          format: date-time
+        revoked:
+          type: boolean
+      required:
+        - id
+        - name
+        - os
+        - user
+        - lastSeenAt
+        - createdAt
+        - revoked
+    Org:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/ObjectId"
+        name:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
+        memberCount:
+          type: integer
+      required:
+        - id
+        - name
+        - role
+        - memberCount
+    Member:
+      type: object
+      properties:
+        userId:
+          $ref: "#/components/schemas/ObjectId"
+        name:
+          type: string
+        email:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
+        joinedAt:
+          type: string
+          format: date-time
+      required:
+        - userId
+        - name
+        - email
+        - role
+        - joinedAt
+    EnvironmentSummary:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/ObjectId"
+        name:
+          type: string
+        killed:
+          type: boolean
+        killedReason:
+          oneOf:
+            - type: string
+            - type: "null"
+        hasAccess:
+          type: boolean
+      required:
+        - id
+        - name
+        - killed
+        - killedReason
+        - hasAccess
+    Project:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/ObjectId"
+        orgId:
+          $ref: "#/components/schemas/ObjectId"
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+        environments:
+          type: array
+          items:
+            $ref: "#/components/schemas/EnvironmentSummary"
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - orgId
+        - name
+        - slug
+        - description
+        - environments
+        - createdAt
+    Environment:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/ObjectId"
+        projectId:
+          $ref: "#/components/schemas/ObjectId"
+        orgId:
+          $ref: "#/components/schemas/ObjectId"
+        name:
+          type: string
+        killed:
+          type: boolean
+        killedReason:
+          oneOf:
+            - type: string
+            - type: "null"
+        version:
+          type: integer
+        hasAccess:
+          type: boolean
+      required:
+        - id
+        - projectId
+        - orgId
+        - name
+        - killed
+        - killedReason
+        - version
+        - hasAccess
+    Resource:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/ObjectId"
+        environmentId:
+          $ref: "#/components/schemas/ObjectId"
+        kind:
+          $ref: "#/components/schemas/ResourceKind"
+        name:
+          type: string
+        config:
+          type: object
+          additionalProperties: true
+          description: Non-secret configuration (e.g. host, database, tls, upstreamUrl, authScheme, fakePrefix, basePath, redirectHosts, region, endpoint, tokenUrl, projectId, clientEmail, keyId, teamId). Never contains credentials.
+        credentialsSet:
+          type: boolean
+        rotatedAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        disabled:
+          type: boolean
+        brokeredFields:
+          type: array
+          items:
+            type: string
+          description: Variable fields this resource can broker.
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - environmentId
+        - kind
+        - name
+        - config
+        - credentialsSet
+        - rotatedAt
+        - disabled
+        - brokeredFields
+        - createdAt
+      description: Credentials are write-only and never returned (L15, S2).
+    Profile:
+      type: object
+      properties:
+        name:
+          type: string
+        rotatedAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        isDefault:
+          type: boolean
+      required:
+        - name
+        - rotatedAt
+        - isDefault
+    Variable:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/ObjectId"
+        environmentId:
+          $ref: "#/components/schemas/ObjectId"
+        key:
+          type: string
+        type:
+          $ref: "#/components/schemas/VariableType"
+        required:
+          type: boolean
+        value:
+          oneOf:
+            - type: string
+              description: Only plain values are readable; null for every other type.
+            - type: "null"
+        format:
+          oneOf:
+            - type: string
+            - type: "null"
+        resourceId:
+          oneOf:
+            - $ref: "#/components/schemas/ObjectId"
+            - type: "null"
+        resourceName:
+          oneOf:
+            - type: string
+            - type: "null"
+        field:
+          oneOf:
+            - type: string
+            - type: "null"
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - environmentId
+        - key
+        - type
+        - required
+        - value
+        - format
+        - resourceId
+        - resourceName
+        - field
+        - updatedAt
+    Preview:
+      type: object
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        hasAccess:
+          type: boolean
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              type:
+                $ref: "#/components/schemas/VariableType"
+              display:
+                type: string
+                description: What the developer's app would see; secrets are never shown.
+            required:
+              - key
+              - type
+              - display
+      required:
+        - user
+        - hasAccess
+        - entries
+    ResourceProfileAssignment:
+      type: object
+      properties:
+        resourceId:
+          $ref: "#/components/schemas/ObjectId"
+        profile:
+          type: string
+          minLength: 1
+          maxLength: 30
+      required:
+        - resourceId
+        - profile
+    Grant:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/ObjectId"
+        scope:
+          type: string
+          enum:
+            - environment
+            - project
+        projectId:
+          $ref: "#/components/schemas/ObjectId"
+        environmentId:
+          oneOf:
+            - $ref: "#/components/schemas/ObjectId"
+            - type: "null"
+        userId:
+          $ref: "#/components/schemas/ObjectId"
+        resourceProfiles:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResourceProfileAssignment"
+          description: Resources not listed use the "default" profile.
+        expiresAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          $ref: "#/components/schemas/ObjectId"
+      required:
+        - id
+        - scope
+        - projectId
+        - environmentId
+        - userId
+        - resourceProfiles
+        - expiresAt
+        - createdAt
+        - createdBy
+    AccessMatrix:
+      type: object
+      properties:
+        members:
+          type: array
+          items:
+            $ref: "#/components/schemas/Member"
+        environments:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                $ref: "#/components/schemas/ObjectId"
+              name:
+                type: string
+              killed:
+                type: boolean
+            required:
+              - id
+              - name
+              - killed
+        grants:
+          type: array
+          items:
+            $ref: "#/components/schemas/Grant"
+      required:
+        - members
+        - environments
+        - grants
+    MemberAccess:
+      type: object
+      properties:
+        userId:
+          $ref: "#/components/schemas/ObjectId"
+        projects:
+          type: array
+          items:
+            type: object
+            properties:
+              projectId:
+                $ref: "#/components/schemas/ObjectId"
+              projectName:
+                type: string
+              grants:
+                type: array
+                items:
+                  allOf:
+                    - $ref: "#/components/schemas/Grant"
+                    - type: object
+                      properties:
+                        environmentName:
+                          oneOf:
+                            - type: string
+                            - type: "null"
+                      required:
+                        - environmentName
+            required:
+              - projectId
+              - projectName
+              - grants
+      required:
+        - userId
+        - projects
+    NamedRef:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/ObjectId"
+        name:
+          type: string
+      required:
+        - id
+        - name
+    AuditEvent:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/ObjectId"
+        action:
+          type: string
+          examples:
+            - grant.created
+        category:
+          $ref: "#/components/schemas/AuditCategory"
+        outcome:
+          type: string
+          examples:
+            - success
+            - denied
+            - error
+        actor:
+          oneOf:
+            - type: object
+              properties:
+                id:
+                  $ref: "#/components/schemas/ObjectId"
+                name:
+                  type: string
+                email:
+                  type: string
+              required:
+                - id
+                - name
+                - email
+            - type: "null"
+        target:
+          oneOf:
+            - type: string
+            - type: "null"
+        targetUser:
+          oneOf:
+            - $ref: "#/components/schemas/NamedRef"
+            - type: "null"
+        project:
+          oneOf:
+            - $ref: "#/components/schemas/NamedRef"
+            - type: "null"
+        environment:
+          oneOf:
+            - $ref: "#/components/schemas/NamedRef"
+            - type: "null"
+        resource:
+          oneOf:
+            - allOf:
+                - $ref: "#/components/schemas/NamedRef"
+                - type: object
+                  properties:
+                    kind:
+                      type: string
+                  required:
+                    - kind
+            - type: "null"
+        meta:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - action
+        - category
+        - outcome
+        - actor
+        - target
+        - targetUser
+        - project
+        - environment
+        - resource
+        - meta
+        - createdAt
+    OrgStats:
+      type: object
+      properties:
+        scope:
+          type: string
+          enum:
+            - org
+            - me
+          description: '"me" for developers (own activity only).'
+        days:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+                format: date
+              connections:
+                type: integer
+              denied:
+                type: integer
+              byCategory:
+                type: object
+                properties:
+                  team:
+                    type: integer
+                  access:
+                    type: integer
+                  config:
+                    type: integer
+                  security:
+                    type: integer
+                  runtime:
+                    type: integer
+                required:
+                  - team
+                  - access
+                  - config
+                  - security
+                  - runtime
+            required:
+              - date
+              - connections
+              - denied
+              - byCategory
+        connectionsByProject:
+          type: array
+          items:
+            type: object
+            properties:
+              projectId:
+                $ref: "#/components/schemas/ObjectId"
+              name:
+                type: string
+              connections:
+                type: integer
+              daily:
+                type: array
+                items:
+                  type: integer
+            required:
+              - projectId
+              - name
+              - connections
+              - daily
+        resourcesByKind:
+          type: array
+          items:
+            type: object
+            properties:
+              kind:
+                type: string
+              count:
+                type: integer
+            required:
+              - kind
+              - count
+        grants:
+          type: object
+          properties:
+            permanent:
+              type: integer
+            temporary:
+              type: integer
+          required:
+            - permanent
+            - temporary
+      required:
+        - scope
+        - days
+        - connectionsByProject
+        - resourcesByKind
+        - grants
+    Bootstrap:
+      type: object
+      properties:
+        schema:
+          type: integer
+          const: 1
+        version:
+          type: integer
+        orgId:
+          $ref: "#/components/schemas/ObjectId"
+        projectId:
+          $ref: "#/components/schemas/ObjectId"
+        projectSlug:
+          type: string
+        environment:
+          type: string
+        envId:
+          $ref: "#/components/schemas/ObjectId"
+        orgCaCert:
+          type: string
+          description: PEM of the org CA used for Layer 2 TLS termination.
+        plain:
+          type: object
+          additionalProperties:
+            type: string
+          description: "Env values the app receives directly: plain, generated, fake (AWS, OAuth, HTTP keys, Google/APNs) and admin-marked visible values."
+        listeners:
+          type: array
+          items:
+            type: object
+            properties:
+              resourceId:
+                $ref: "#/components/schemas/ObjectId"
+              kind:
+                type: string
+              name:
+                type: string
+              env:
+                type: object
+                additionalProperties:
+                  type: string
+                description: Env values for this listener; `{port}` is replaced by the agent's local port.
+            required:
+              - resourceId
+              - kind
+              - name
+              - env
+        redirects:
+          type: array
+          items:
+            type: object
+            properties:
+              host:
+                type: string
+              port:
+                type: integer
+              resourceId:
+                $ref: "#/components/schemas/ObjectId"
+            required:
+              - host
+              - port
+              - resourceId
+        visibleKeys:
+          type: array
+          items:
+            type: string
+          description: Keys in `plain` that carry real values marked visible.
+      required:
+        - schema
+        - version
+        - orgId
+        - projectId
+        - projectSlug
+        - environment
+        - envId
+        - orgCaCert
+        - plain
+        - listeners
+        - redirects
+        - visibleKeys
+      description: "FR-AGT-003 snapshot: fake, personal and plain values only (S1)."
+    SignupBody:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        email:
+          type: string
+          format: email
+          maxLength: 200
+          examples:
+            - dev@example.com
+        password:
+          type: string
+          minLength: 8
+          maxLength: 200
+          writeOnly: true
+          description: Account password.
+        orgName:
+          type: string
+          minLength: 1
+          maxLength: 100
+      required:
+        - name
+        - email
+        - password
+        - orgName
+    LoginBody:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          examples:
+            - dev@example.com
+        password:
+          type: string
+          minLength: 1
+          writeOnly: true
+          description: Account password.
+      required:
+        - email
+        - password
+    AcceptInviteBody:
+      type: object
+      properties:
+        token:
+          type: string
+          minLength: 10
+          writeOnly: true
+          description: Invite token from the invite link.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+          maxLength: 200
+          writeOnly: true
+          description: New account password.
+      required:
+        - token
+      description: name, email and password are required when no session cookie is present.
+    StartDeviceBody:
+      type: object
+      properties:
+        deviceName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        os:
+          type: string
+          maxLength: 40
+          default: unknown
+      required:
+        - deviceName
+    PollDeviceBody:
+      type: object
+      properties:
+        deviceCode:
+          type: string
+          minLength: 10
+          writeOnly: true
+          description: deviceCode from /cli/device/start.
+      required:
+        - deviceCode
+    ApproveDeviceBody:
+      type: object
+      properties:
+        userCode:
+          type: string
+          pattern: ^[A-Za-z2-9]{4}-[A-Za-z2-9]{4}$
+          description: Trimmed and uppercased before matching ^[A-Z2-9]{4}-[A-Z2-9]{4}$.
+          examples:
+            - ABCD-EFGH
+        deviceName:
+          type: string
+          minLength: 1
+          maxLength: 100
+      required:
+        - userCode
+    UpdateRoleBody:
+      type: object
+      properties:
+        role:
+          $ref: "#/components/schemas/Role"
+      required:
+        - role
+    CreateInviteBody:
+      type: object
+      properties:
+        role:
+          $ref: "#/components/schemas/Role"
+          default: developer
+        email:
+          type: string
+          format: email
+    CreateProjectBody:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        description:
+          type: string
+          maxLength: 500
+        environments:
+          type: array
+          items:
+            $ref: "#/components/schemas/EnvName"
+          minItems: 1
+          maxItems: 10
+          default:
+            - development
+            - staging
+      required:
+        - name
+    UpdateProjectBody:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        description:
+          type: string
+          maxLength: 500
+    CreateEnvironmentBody:
+      type: object
+      properties:
+        name:
+          $ref: "#/components/schemas/EnvName"
+      required:
+        - name
+    UpdateEnvironmentBody:
+      type: object
+      properties:
+        name:
+          $ref: "#/components/schemas/EnvName"
+        killed:
+          type: boolean
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 200
+          description: Required when killed=true.
+    CreateMongodbResource:
+      type: object
+      properties:
+        kind:
+          type: string
+          const: mongodb
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+          description: Trimmed.
+        connectionUri:
+          type: string
+          minLength: 10
+          writeOnly: true
+          description: Real MongoDB connection URI (mongodb:// or mongodb+srv://).
+      required:
+        - kind
+        - name
+        - connectionUri
+    CreateRedisResource:
+      type: object
+      properties:
+        kind:
+          type: string
+          const: redis
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+          description: Trimmed.
+        connectionUri:
+          type: string
+          minLength: 8
+          writeOnly: true
+          description: Real Redis URI (redis:// or rediss://).
+      required:
+        - kind
+        - name
+        - connectionUri
+    CreatePostgresResource:
+      type: object
+      properties:
+        kind:
+          type: string
+          const: postgres
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+          description: Trimmed.
+        connectionUri:
+          type: string
+          minLength: 10
+          writeOnly: true
+          description: Real Postgres connection URI.
+      required:
+        - kind
+        - name
+        - connectionUri
+    CreateMysqlResource:
+      type: object
+      properties:
+        kind:
+          type: string
+          const: mysql
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+          description: Trimmed.
+        connectionUri:
+          type: string
+          minLength: 8
+          writeOnly: true
+          description: Real MySQL connection URI.
+      required:
+        - kind
+        - name
+        - connectionUri
+    CreateSmtpResource:
+      type: object
+      properties:
+        kind:
+          type: string
+          const: smtp
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+          description: Trimmed.
+        connectionUri:
+          type: string
+          minLength: 8
+          writeOnly: true
+          description: Real SMTP URI (smtp:// or smtps://).
+      required:
+        - kind
+        - name
+        - connectionUri
+    CreateHttpResource:
+      type: object
+      properties:
+        kind:
+          type: string
+          const: http
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+          description: Trimmed.
+        upstreamUrl:
+          type: string
+          format: uri
+          pattern: ^https://
+          description: Must be an https:// URL.
+        authScheme:
+          $ref: "#/components/schemas/AuthScheme"
+          default: bearer
+        apiKey:
+          type: string
+          minLength: 1
+          writeOnly: true
+          description: Real API key.
+        fakePrefix:
+          type: string
+          maxLength: 20
+          default: cb_
+        basePath:
+          type: string
+          pattern: ^(/[^\s]*)?$
+          default: ""
+          description: Empty or starts with /.
+        redirectHosts:
+          type: array
+          items:
+            type: string
+            pattern: ^[A-Za-z0-9.-]+:[0-9]{1,5}$
+            description: host:port, e.g. api.example.com:443 (case-insensitive; stored lowercased).
+            examples:
+              - api.example.com:443
+          maxItems: 10
+          default: []
+      required:
+        - kind
+        - name
+        - upstreamUrl
+        - apiKey
+    CreateAwsResource:
+      type: object
+      properties:
+        kind:
+          type: string
+          const: aws
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+          description: Trimmed.
+        region:
+          type: string
+          pattern: ^[a-z0-9-]+$
+          description: e.g. eu-west-1, or auto for R2.
+        endpoint:
+          type: string
+          format: uri
+          description: https://, or http:// only for 127.0.0.1/localhost.
+        accessKeyId:
+          type: string
+          minLength: 3
+          writeOnly: true
+          description: Real access key ID.
+        secretAccessKey:
+          type: string
+          minLength: 8
+          writeOnly: true
+          description: Real secret access key.
+      required:
+        - kind
+        - name
+        - region
+        - endpoint
+        - accessKeyId
+        - secretAccessKey
+    CreateGoogleSaResource:
+      type: object
+      properties:
+        kind:
+          type: string
+          const: google-sa
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+          description: Trimmed.
+        serviceAccountJson:
+          type: string
+          description: Google service-account JSON key file as a string; must parse and contain project_id, client_email and private_key.
+          writeOnly: true
+        upstreamUrl:
+          type: string
+          format: uri
+          pattern: ^https://
+          description: Must be an https:// URL.
+        redirectHosts:
+          type: array
+          items:
+            type: string
+            pattern: ^[A-Za-z0-9.-]+:[0-9]{1,5}$
+            description: host:port, e.g. api.example.com:443 (case-insensitive; stored lowercased).
+            examples:
+              - api.example.com:443
+          maxItems: 10
+      required:
+        - kind
+        - name
+        - serviceAccountJson
+    CreateApnsResource:
+      type: object
+      properties:
+        kind:
+          type: string
+          const: apns
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+          description: Trimmed.
+        keyId:
+          type: string
+          pattern: ^[A-Z0-9]{10}$
+          description: 10-character key ID from Apple.
+        teamId:
+          type: string
+          pattern: ^[A-Z0-9]{10}$
+          description: 10-character team ID from Apple.
+        privateKey:
+          type: string
+          description: Real .p8 signing key (PEM).
+          writeOnly: true
+        upstreamUrl:
+          type: string
+          format: uri
+          pattern: ^https://
+          description: Must be an https:// URL.
+        redirectHosts:
+          type: array
+          items:
+            type: string
+            pattern: ^[A-Za-z0-9.-]+:[0-9]{1,5}$
+            description: host:port, e.g. api.example.com:443 (case-insensitive; stored lowercased).
+            examples:
+              - api.example.com:443
+          maxItems: 10
+      required:
+        - kind
+        - name
+        - keyId
+        - teamId
+        - privateKey
+    CreateOauthResource:
+      type: object
+      properties:
+        kind:
+          type: string
+          const: oauth
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+          description: Trimmed.
+        tokenUrl:
+          type: string
+          format: uri
+          pattern: ^https://
+          description: Must be an https:// URL.
+        clientSecret:
+          type: string
+          minLength: 1
+          writeOnly: true
+          description: Real OAuth client secret.
+        upstreamUrl:
+          type: string
+          format: uri
+        redirectHosts:
+          type: array
+          items:
+            type: string
+            pattern: ^[A-Za-z0-9.-]+:[0-9]{1,5}$
+            description: host:port, e.g. api.example.com:443 (case-insensitive; stored lowercased).
+            examples:
+              - api.example.com:443
+          maxItems: 10
+      required:
+        - kind
+        - name
+        - tokenUrl
+        - clientSecret
+    CreateResourceBody:
+      oneOf:
+        - $ref: "#/components/schemas/CreatePostgresResource"
+        - $ref: "#/components/schemas/CreateMysqlResource"
+        - $ref: "#/components/schemas/CreateMongodbResource"
+        - $ref: "#/components/schemas/CreateRedisResource"
+        - $ref: "#/components/schemas/CreateSmtpResource"
+        - $ref: "#/components/schemas/CreateHttpResource"
+        - $ref: "#/components/schemas/CreateOauthResource"
+        - $ref: "#/components/schemas/CreateAwsResource"
+        - $ref: "#/components/schemas/CreateGoogleSaResource"
+        - $ref: "#/components/schemas/CreateApnsResource"
+      discriminator:
+        propertyName: kind
+        mapping:
+          postgres: "#/components/schemas/CreatePostgresResource"
+          mysql: "#/components/schemas/CreateMysqlResource"
+          mongodb: "#/components/schemas/CreateMongodbResource"
+          redis: "#/components/schemas/CreateRedisResource"
+          smtp: "#/components/schemas/CreateSmtpResource"
+          http: "#/components/schemas/CreateHttpResource"
+          oauth: "#/components/schemas/CreateOauthResource"
+          aws: "#/components/schemas/CreateAwsResource"
+          google-sa: "#/components/schemas/CreateGoogleSaResource"
+          apns: "#/components/schemas/CreateApnsResource"
+    UpdateResourceBody:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 60
+          description: Trimmed.
+        disabled:
+          type: boolean
+        connectionUri:
+          type: string
+          minLength: 8
+          writeOnly: true
+          description: Rotates the credential (database/SMTP kinds).
+        apiKey:
+          type: string
+          minLength: 1
+          writeOnly: true
+          description: Rotates the credential (http).
+        clientSecret:
+          type: string
+          minLength: 1
+          writeOnly: true
+          description: Rotates the credential (oauth).
+        accessKeyId:
+          type: string
+          minLength: 3
+          writeOnly: true
+          description: Rotates the credential with secretAccessKey (aws).
+        secretAccessKey:
+          type: string
+          minLength: 8
+          writeOnly: true
+          description: Rotates the credential with accessKeyId (aws).
+        serviceAccountJson:
+          type: string
+          description: Rotates the credential (google-sa).
+          writeOnly: true
+        privateKey:
+          type: string
+          description: Rotates the credential (apns).
+          writeOnly: true
+        keyId:
+          type: string
+          pattern: ^[A-Z0-9]{10}$
+        teamId:
+          type: string
+          pattern: ^[A-Z0-9]{10}$
+        region:
+          type: string
+          pattern: ^[a-z0-9-]+$
+        endpoint:
+          type: string
+          format: uri
+        tokenUrl:
+          type: string
+          format: uri
+        upstreamUrl:
+          type: string
+          format: uri
+        authScheme:
+          $ref: "#/components/schemas/AuthScheme"
+        fakePrefix:
+          type: string
+          maxLength: 20
+        basePath:
+          type: string
+        redirectHosts:
+          type: array
+          items:
+            type: string
+            pattern: ^[A-Za-z0-9.-]+:[0-9]{1,5}$
+            description: host:port, e.g. api.example.com:443 (case-insensitive; stored lowercased).
+            examples:
+              - api.example.com:443
+          maxItems: 10
+      description: All fields optional; fields that do not apply to the resource's kind are ignored.
+    ProfileCredentialsBody:
+      type: object
+      properties:
+        connectionUri:
+          type: string
+          minLength: 8
+          writeOnly: true
+          description: Database/SMTP kinds.
+        apiKey:
+          type: string
+          minLength: 1
+          writeOnly: true
+          description: http.
+        clientSecret:
+          type: string
+          minLength: 1
+          writeOnly: true
+          description: oauth.
+        accessKeyId:
+          type: string
+          minLength: 3
+          writeOnly: true
+          description: aws (with secretAccessKey).
+        secretAccessKey:
+          type: string
+          minLength: 8
+          writeOnly: true
+          description: aws (with accessKeyId).
+        serviceAccountJson:
+          type: string
+          description: google-sa.
+          writeOnly: true
+        privateKey:
+          type: string
+          description: apns.
+          writeOnly: true
+      description: The write-only credential fields matching the resource's kind; one set per profile.
+    CreateProfileBody:
+      allOf:
+        - $ref: "#/components/schemas/ProfileCredentialsBody"
+        - type: object
+          properties:
+            name:
+              type: string
+              pattern: ^[a-z][a-z0-9-]{0,29}$
+              not:
+                const: default
+              description: Lowercase letters, digits and dashes, e.g. readonly. "default" is reserved.
+          required:
+            - name
+    CreateVariableBody:
+      oneOf:
+        - $ref: "#/components/schemas/CreatePlainVariable"
+        - $ref: "#/components/schemas/CreateGeneratedVariable"
+        - $ref: "#/components/schemas/CreateVisibleVariable"
+        - $ref: "#/components/schemas/CreateBrokeredVariable"
+      discriminator:
+        propertyName: type
+        mapping:
+          plain: "#/components/schemas/CreatePlainVariable"
+          generated: "#/components/schemas/CreateGeneratedVariable"
+          visible: "#/components/schemas/CreateVisibleVariable"
+          brokered: "#/components/schemas/CreateBrokeredVariable"
+    VariableKey:
+      type: string
+      pattern: ^[A-Z_][A-Z0-9_]*$
+      description: UPPER_SNAKE_CASE (trimmed).
+      examples:
+        - DATABASE_URL
+    CreatePlainVariable:
+      type: object
+      properties:
+        type:
+          type: string
+          const: plain
+        key:
+          $ref: "#/components/schemas/VariableKey"
+        value:
+          type: string
+          maxLength: 10000
+        required:
+          type: boolean
+          default: false
+      required:
+        - type
+        - key
+        - value
+    CreateGeneratedVariable:
+      type: object
+      properties:
+        type:
+          type: string
+          const: generated
+        key:
+          $ref: "#/components/schemas/VariableKey"
+        format:
+          $ref: "#/components/schemas/GeneratedFormat"
+        required:
+          type: boolean
+          default: false
+      required:
+        - type
+        - key
+        - format
+    CreateVisibleVariable:
+      type: object
+      properties:
+        type:
+          type: string
+          const: visible
+        key:
+          $ref: "#/components/schemas/VariableKey"
+        value:
+          type: string
+          minLength: 1
+          maxLength: 10000
+          writeOnly: true
+          description: Real value shown to developers; never returned by the API.
+        required:
+          type: boolean
+          default: false
+      required:
+        - type
+        - key
+        - value
+    CreateBrokeredVariable:
+      type: object
+      properties:
+        type:
+          type: string
+          const: brokered
+        key:
+          $ref: "#/components/schemas/VariableKey"
+        resourceId:
+          type: string
+          description: A resource in the same environment.
+        field:
+          type: string
+          description: One of the resource's brokeredFields.
+        required:
+          type: boolean
+          default: false
+      required:
+        - type
+        - key
+        - resourceId
+        - field
+    UpdateVariableBody:
+      type: object
+      properties:
+        key:
+          $ref: "#/components/schemas/VariableKey"
+        value:
+          type: string
+          maxLength: 10000
+          writeOnly: true
+          description: "plain: new value; visible: new write-only value."
+        format:
+          $ref: "#/components/schemas/GeneratedFormat"
+        resourceId:
+          type: string
+        field:
+          type: string
+        required:
+          type: boolean
+      description: Fields that do not apply to the variable's type are ignored.
+    ExpiresAt:
+      oneOf:
+        - type: string
+          format: date-time
+          description: ISO 8601; must be in the future. null = permanent.
+        - type: "null"
+    ResourceProfiles:
+      type: array
+      items:
+        $ref: "#/components/schemas/ResourceProfileAssignment"
+      maxItems: 50
+    CreateGrantBody:
+      type: object
+      properties:
+        userId:
+          type: string
+        resourceProfiles:
+          $ref: "#/components/schemas/ResourceProfiles"
+        expiresAt:
+          $ref: "#/components/schemas/ExpiresAt"
+      required:
+        - userId
+    UpdateGrantBody:
+      type: object
+      properties:
+        resourceProfiles:
+          $ref: "#/components/schemas/ResourceProfiles"
+        expiresAt:
+          $ref: "#/components/schemas/ExpiresAt"
+    SetProjectAccessBody:
+      type: object
+      properties:
+        scope:
+          type: string
+          enum:
+            - project
+            - environments
+          description: '"project" = every environment incl. later ones; "environments" = only those listed.'
+        environmentIds:
+          type: array
+          items:
+            $ref: "#/components/schemas/ObjectId"
+          maxItems: 50
+          description: Required (at least one) when scope is "environments".
+        expiresAt:
+          $ref: "#/components/schemas/ExpiresAt"
+        resourceProfiles:
+          $ref: "#/components/schemas/ResourceProfiles"
+      required:
+        - scope
