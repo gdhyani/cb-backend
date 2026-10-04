@@ -4,6 +4,7 @@ import type { Duplex } from "node:stream";
 import { safeEqual } from "../../crypto/safe-equal.js";
 import { fakeDbCredentials } from "../../services/fakes.service.js";
 import { parseMysqlUri } from "../../utils/connection-uri.js";
+import { mysqlFramer, REVOKED_TEXT, relayWithRevocation } from "../revoke-relay.js";
 import { connected } from "../stream-io.js";
 import { type StreamAdapter, UpstreamError } from "../types.js";
 import {
@@ -73,7 +74,7 @@ async function authenticateUpstream(
  * §10.8 mysql: connect upstream first, mirror its greeting to the app with our own scramble
  * (mysql_native_password), verify the device's fake password, then log in upstream with the real one.
  */
-export const mysqlAdapter: StreamAdapter = async (client: Duplex, ctx) => {
+export const mysqlAdapter: StreamAdapter = async (client: Duplex, ctx, hooks) => {
   const real = parseMysqlUri(ctx.secret);
   const upstream = net.connect({ host: real.host, port: real.port });
   upstream.pause();
@@ -153,6 +154,9 @@ export const mysqlAdapter: StreamAdapter = async (client: Duplex, ctx) => {
     throw err;
   }
   writePacket(client, clientSeq + 1, ok);
-  client.pipe(upstream);
-  upstream.pipe(client);
+  // FR-GW-007: an ERR packet continuing the current sequence (1927 = connection killed).
+  const framer = mysqlFramer();
+  relayWithRevocation(client, upstream, framer, hooks, () =>
+    packet((framer.lastSeq() + 1) & 0xff, errPacket(1927, "70100", REVOKED_TEXT)),
+  );
 };

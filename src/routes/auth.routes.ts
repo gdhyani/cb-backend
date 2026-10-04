@@ -7,7 +7,7 @@ import {
   previewInviteHandler,
   signupHandler,
 } from "../controllers/auth.controller.js";
-import { requireAuth } from "../middlewares/auth.middleware.js";
+import { csrfIfSession, requireAuth } from "../middlewares/auth.middleware.js";
 
 export const authRoutes = Router();
 
@@ -16,4 +16,4 @@ authRoutes.post("/auth/login", loginHandler);
 authRoutes.post("/auth/logout", requireAuth, logoutHandler);
 authRoutes.get("/auth/me", requireAuth, meHandler);
 authRoutes.get("/invites/:token", previewInviteHandler);
-authRoutes.post("/auth/accept-invite", acceptInviteHandler);
+authRoutes.post("/auth/accept-invite", csrfIfSession, acceptInviteHandler);

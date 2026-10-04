@@ -20,7 +20,7 @@ export interface TunnelContext {
 
 export interface AdapterHooks {
   /** Called just before a revoked tunnel closes, to send a protocol-native error (FR-GW-007). */
-  onRevoke?: (reason: string) => void;
+  onRevoke?: (reason: string) => void | Promise<void>;
 }
 
 export type StreamAdapter = (stream: Duplex, ctx: TunnelContext, hooks: AdapterHooks) => Promise<void> | void;

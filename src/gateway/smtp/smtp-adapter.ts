@@ -5,6 +5,7 @@ import { safeEqual } from "../../crypto/safe-equal.js";
 import { fakeDbCredentials } from "../../services/fakes.service.js";
 import { parseSmtpUri } from "../../utils/connection-uri.js";
 import { upstreamCa } from "../http/upstream.js";
+import { LineFramer, REVOKED_TEXT, relayWithRevocation } from "../revoke-relay.js";
 import { connected, readLine } from "../stream-io.js";
 import { type StreamAdapter, UpstreamError } from "../types.js";
 
@@ -69,7 +70,7 @@ async function openUpstream(uri: string): Promise<Duplex> {
  * §10.8 smtp: speak SMTP to the app, accept AUTH PLAIN/LOGIN with the device's fake credentials,
  * then attach an authenticated upstream session and relay the rest (MAIL/RCPT/DATA…) unchanged.
  */
-export const smtpAdapter: StreamAdapter = async (client: Duplex, ctx) => {
+export const smtpAdapter: StreamAdapter = async (client: Duplex, ctx, hooks) => {
   const fake = fakeDbCredentials({
     deviceId: ctx.deviceId,
     environmentId: ctx.environmentId,
@@ -129,6 +130,8 @@ export const smtpAdapter: StreamAdapter = async (client: Duplex, ctx) => {
   client.on("close", () => upstream.destroy());
   upstream.on("close", () => client.destroy());
   upstream.on("error", () => client.destroy());
-  client.pipe(upstream);
-  upstream.pipe(client);
+  // FR-GW-007: a 421 reply (service closing) after the current reply line.
+  relayWithRevocation(client, upstream, new LineFramer(), hooks, () =>
+    Buffer.from(`421 4.7.0 ${REVOKED_TEXT}\r\n`),
+  );
 };

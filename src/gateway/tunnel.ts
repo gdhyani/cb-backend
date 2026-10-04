@@ -282,8 +282,10 @@ function onBusEvent(event: Parameters<Parameters<typeof bus.subscribe>[0]>[0]): 
     void revalidate(tunnel.ctx).then((reason) => {
       if (!reason) return;
       const message = `access revoked (${event.reason})`;
-      tunnel.hooks.onRevoke?.(message);
-      tunnel.ws.close(CloseCode.Revoked, closeReason(message));
+      // Give the adapter a moment to send a protocol-native error first (bounded inside the adapter).
+      void Promise.resolve(tunnel.hooks.onRevoke?.(message))
+        .catch(() => undefined)
+        .finally(() => tunnel.ws.close(CloseCode.Revoked, closeReason(message)));
       logger.info(`tunnel ${tunnel.ctx.id.slice(0, 8)} closed: ${reason}`);
     });
   }
