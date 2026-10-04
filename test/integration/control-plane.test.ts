@@ -401,3 +401,82 @@ describe("org stats (dashboard charts)", () => {
     expect(mine.body.data.days.at(-1).byCategory.config).toBe(0);
   });
 });
+
+describe("project access (J4: project-wide or per-environment)", () => {
+  it("J4 project-wide access covers environments created later; narrowing and removal revoke the rest", async () => {
+    const { owner, orgId } = await signupOwner(app);
+    const project = await owner.post(`/api/orgs/${orgId}/projects`, { name: "Payments" });
+    const projectId = project.body.data.id as string;
+    const devEnvId = project.body.data.environments[0].id as string;
+    const dev = await addMember(app, owner, orgId, "Dana");
+    const { token } = await loginDevice(app, dev.member);
+    const boot = (env: string) =>
+      cli(app, token).get(`/api/agent/bootstrap?projectId=${projectId}&env=${env}`);
+    const events: BusEvent[] = [];
+    const stop = bus.subscribe((e) => events.push(e));
+
+    const granted = await owner.put(`/api/projects/${projectId}/access/${dev.userId}`, { scope: "project" });
+    expect(granted.status).toBe(200);
+    expect(granted.body.data).toEqual([expect.objectContaining({ scope: "project", environmentId: null })]);
+    expect((await boot("development")).status).toBe(200);
+
+    // A new environment is covered without another grant.
+    const preview = await owner.post(`/api/projects/${projectId}/environments`, { name: "preview" });
+    expect(preview.status).toBe(201);
+    expect((await boot("preview")).status).toBe(200);
+
+    // Narrow to development only: the project grant is revoked (and announced), preview is refused.
+    const narrowed = await owner.put(`/api/projects/${projectId}/access/${dev.userId}`, {
+      scope: "environments",
+      environmentIds: [devEnvId],
+    });
+    expect(narrowed.body.data).toEqual([
+      expect.objectContaining({ scope: "environment", environmentId: devEnvId }),
+    ]);
+    expect(events.some((e) => e.type === "access.revoked" && e.scope === "project")).toBe(true);
+    expect((await boot("preview")).status).toBe(403);
+    expect((await boot("development")).status).toBe(200);
+
+    const access = await owner.get(`/api/orgs/${orgId}/members/${dev.userId}/access`);
+    expect(access.body.data.projects).toEqual([
+      expect.objectContaining({
+        projectName: "Payments",
+        grants: [expect.objectContaining({ scope: "environment", environmentName: "development" })],
+      }),
+    ]);
+
+    expect((await owner.delete(`/api/projects/${projectId}/access/${dev.userId}`)).body.data).toEqual({
+      revoked: 1,
+    });
+    expect((await boot("development")).status).toBe(403);
+    stop();
+  });
+
+  it("J4 rejects grants for owners/admins, empty environment lists and foreign environments", async () => {
+    const { owner, orgId, userId: ownerId } = await signupOwner(app);
+    const project = await owner.post(`/api/orgs/${orgId}/projects`, { name: "Shop" });
+    const other = await owner.post(`/api/orgs/${orgId}/projects`, { name: "Other" });
+    const projectId = project.body.data.id as string;
+    const dev = await addMember(app, owner, orgId, "Eli");
+    expect(
+      (await owner.put(`/api/projects/${projectId}/access/${ownerId}`, { scope: "project" })).status,
+    ).toBe(400);
+    expect(
+      (
+        await owner.put(`/api/projects/${projectId}/access/${dev.userId}`, {
+          scope: "environments",
+          environmentIds: [],
+        })
+      ).status,
+    ).toBe(400);
+    const foreign = other.body.data.environments[0].id as string;
+    expect(
+      (
+        await owner.put(`/api/projects/${projectId}/access/${dev.userId}`, {
+          scope: "environments",
+          environmentIds: [foreign],
+        })
+      ).status,
+    ).toBe(400);
+  });
+});

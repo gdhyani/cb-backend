@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   createInviteHandler,
+  getMemberAccessHandler,
   getOrgHandler,
   getOrgStatsHandler,
   listAuditHandler,
@@ -27,6 +28,7 @@ orgRoutes.get("/orgs/:orgId", getOrgHandler);
 orgRoutes.get("/orgs/:orgId/members", listMembersHandler);
 orgRoutes.patch("/orgs/:orgId/members/:userId", updateMemberHandler);
 orgRoutes.delete("/orgs/:orgId/members/:userId", removeMemberHandler);
+orgRoutes.get("/orgs/:orgId/members/:userId/access", getMemberAccessHandler);
 orgRoutes.get("/orgs/:orgId/invites", listInvitesHandler);
 orgRoutes.post("/orgs/:orgId/invites", createInviteHandler);
 orgRoutes.delete("/orgs/:orgId/invites/:inviteId", revokeInviteHandler);
