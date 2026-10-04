@@ -9,7 +9,6 @@ import mysql from "mysql2/promise";
 import nodemailer from "nodemailer";
 import pg from "pg";
 import { request } from "undici";
-import { getEnv } from "../config/env.js";
 import { signJwt } from "../crypto/jwt.js";
 import { AppError } from "../errors/app-error.js";
 import { type AuthScheme, injectCredential } from "../gateway/http/http-adapter.js";
@@ -312,6 +311,22 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
   },
 };
 
+/** J2: test credentials that are not saved yet (Save & test, Replace value). No DB access, no audit. */
+export async function runDraftTest(
+  kind: ResourceKind,
+  secret: string,
+  config: Record<string, unknown>,
+): Promise<{ ok: boolean; latencyMs: number; message: string }> {
+  const started = Date.now();
+  let outcome: Outcome;
+  try {
+    outcome = await withTimeout(testers[kind](secret, config), "Connection test");
+  } catch (err) {
+    outcome = { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+  return { ok: outcome.ok, latencyMs: Date.now() - started, message: scrub(outcome.message, secret) };
+}
+
 /** J2 "test connection": connect from the gateway with the real credentials of a profile and report the outcome. */
 export async function testResource(
   actorId: string,
@@ -326,22 +341,12 @@ export async function testResource(
       ? await readResourceSecret(resource._id)
       : await readProfileSecret(resource._id, profile);
   if (secret === undefined) throw new AppError("NOT_FOUND", { message: `Profile "${profile}" not found.` });
-  const started = Date.now();
-  let outcome: Outcome;
-  try {
-    outcome = await withTimeout(
-      testers[resource.kind as ResourceKind](secret, (resource.config as Record<string, unknown>) ?? {}),
-      "Connection test",
-    );
-  } catch (err) {
-    outcome = { ok: false, message: err instanceof Error ? err.message : String(err) };
-  }
-  const result: ResourceTestDto = {
-    ok: outcome.ok,
-    profile,
-    latencyMs: Date.now() - started,
-    message: scrub(outcome.message, secret),
-  };
+  const draft = await runDraftTest(
+    resource.kind as ResourceKind,
+    secret,
+    (resource.config as Record<string, unknown>) ?? {},
+  );
+  const result: ResourceTestDto = { ...draft, profile };
   await recordAudit({
     orgId: resource.orgId,
     actorId,
