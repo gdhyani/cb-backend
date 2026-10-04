@@ -59,10 +59,13 @@ const tlsWanted = (config: Record<string, unknown>) => config.tls === true;
 
 const testers: Record<ResourceKind, (secret: string, config: Record<string, unknown>) => Promise<Outcome>> = {
   async postgres(secret, config) {
+    // pg lets sslmode/sslrootcert in the URI override the ssl option, which would drop our verified CA list.
+    const url = new URL(secret);
+    for (const k of ["sslmode", "sslrootcert", "sslcert", "sslkey", "ssl"]) url.searchParams.delete(k);
     const client = new pg.Client({
-      connectionString: secret,
+      connectionString: url.toString(),
       connectionTimeoutMillis: TIMEOUT_MS,
-      ...(tlsWanted(config) ? { ssl: { ca: upstreamCa(), rejectUnauthorized: true } } : {}),
+      ...(tlsWanted(config) ? { ssl: { ca: upstreamCa(config.caCert), rejectUnauthorized: true } } : {}),
     });
     await client.connect();
     try {
@@ -80,7 +83,7 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
       .createConnection({
         uri: secret,
         connectTimeout: TIMEOUT_MS,
-        ...(tlsWanted(config) ? { ssl: { ca: upstreamCa(), rejectUnauthorized: true } } : {}),
+        ...(tlsWanted(config) ? { ssl: { ca: upstreamCa(config.caCert), rejectUnauthorized: true } } : {}),
       })
       .catch((err: { errno?: number; message?: string }) => {
         // ER_SECURE_TRANSPORT_REQUIRED: tell the admin the fix instead of a bare refusal.
@@ -102,7 +105,7 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
       // A single host is tested directly; replica sets and mongodb+srv go through normal discovery.
       ...(!target.srv && target.hosts.length === 1 ? { directConnection: true } : {}),
       // System roots plus the test-only extra CA (a CA file alone would replace the public roots).
-      ...(tlsWanted(config) && upstreamCa() ? { ca: upstreamCa() } : {}),
+      ...(tlsWanted(config) && upstreamCa(config.caCert) ? { ca: upstreamCa(config.caCert) } : {}),
     });
     try {
       await client.connect();
@@ -118,7 +121,7 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
       connectTimeout: TIMEOUT_MS,
       maxRetriesPerRequest: 0,
       retryStrategy: () => null,
-      ...(tlsWanted(config) ? { tls: { ca: upstreamCa() } } : {}),
+      ...(tlsWanted(config) ? { tls: { ca: upstreamCa(config.caCert) } } : {}),
     });
     client.on("error", () => undefined);
     try {
@@ -132,8 +135,8 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
       client.disconnect();
     }
   },
-  async smtp(secret) {
-    const transport = nodemailer.createTransport(secret, { tls: { ca: upstreamCa() } } as never);
+  async smtp(secret, config) {
+    const transport = nodemailer.createTransport(secret, { tls: { ca: upstreamCa(config.caCert) } } as never);
     try {
       await withTimeout(transport.verify(), "SMTP login");
       return { ok: true, message: "Mail server accepted the login" };

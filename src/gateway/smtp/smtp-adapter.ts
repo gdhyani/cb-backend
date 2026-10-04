@@ -37,12 +37,12 @@ async function command(
 }
 
 /** Opens the real SMTP session: greeting, EHLO, STARTTLS when offered (verified), AUTH with real credentials. */
-async function openUpstream(uri: string): Promise<Duplex> {
+async function openUpstream(uri: string, caCert?: unknown): Promise<Duplex> {
   const real = parseSmtpUri(uri);
   const servername = net.isIP(real.host) ? undefined : real.host;
   let socket: Duplex =
     real.protocol === "smtps"
-      ? tls.connect({ host: real.host, port: real.port, servername, ca: upstreamCa() })
+      ? tls.connect({ host: real.host, port: real.port, servername, ca: upstreamCa(caCert) })
       : net.connect({ host: real.host, port: real.port });
   socket.pause();
   await connected(
@@ -54,7 +54,7 @@ async function openUpstream(uri: string): Promise<Duplex> {
   let ehlo = await command(socket, "EHLO cb-gateway", [250]);
   if (real.protocol === "smtp" && ehlo.lines.some((l) => /STARTTLS/i.test(l))) {
     await command(socket, "STARTTLS", [220]);
-    const secure = tls.connect({ socket, servername, ca: upstreamCa() });
+    const secure = tls.connect({ socket, servername, ca: upstreamCa(caCert) });
     secure.pause();
     await connected(secure, "secureConnect", `smtp ${real.host}:${real.port} (starttls)`);
     socket = secure;
@@ -121,7 +121,7 @@ export const smtpAdapter: StreamAdapter = async (client: Duplex, ctx, hooks) => 
 
   let upstream: Duplex;
   try {
-    upstream = await openUpstream(ctx.secret);
+    upstream = await openUpstream(ctx.secret, ctx.resource.config.caCert);
   } catch (err) {
     say("421 4.7.0 cb: the gateway could not reach the mail server");
     client.end();

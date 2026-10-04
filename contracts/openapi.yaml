@@ -1,6 +1,6 @@
 # cb API contract. Owned by cb-backend; consumers run `npm run sync:contract`.
 openapi: 3.1.0
-x-contract-version: 1.0.0
+x-contract-version: 1.1.0
 info:
   title: cb API
   version: 1.0.0
@@ -4135,6 +4135,12 @@ components:
           minLength: 3
           maxLength: 200
           description: Required when killed=true.
+    CaCertificate:
+      type: string
+      maxLength: 32000
+      description: >-
+        Public PEM CA certificate(s) the server's TLS certificate chains to (self-hosted or private-CA databases).
+        Trusted for this resource only, in addition to the system roots; hostname checks still apply.
     CreateMongodbResource:
       type: object
       properties:
@@ -4151,6 +4157,8 @@ components:
           minLength: 10
           writeOnly: true
           description: Real MongoDB connection URI (mongodb:// or mongodb+srv://).
+        caCert:
+          $ref: "#/components/schemas/CaCertificate"
       required:
         - kind
         - name
@@ -4171,6 +4179,8 @@ components:
           minLength: 8
           writeOnly: true
           description: Real Redis URI (redis:// or rediss://).
+        caCert:
+          $ref: "#/components/schemas/CaCertificate"
       required:
         - kind
         - name
@@ -4191,6 +4201,8 @@ components:
           minLength: 10
           writeOnly: true
           description: Real Postgres connection URI.
+        caCert:
+          $ref: "#/components/schemas/CaCertificate"
       required:
         - kind
         - name
@@ -4211,6 +4223,8 @@ components:
           minLength: 8
           writeOnly: true
           description: Real MySQL connection URI.
+        caCert:
+          $ref: "#/components/schemas/CaCertificate"
       required:
         - kind
         - name
@@ -4231,6 +4245,8 @@ components:
           minLength: 8
           writeOnly: true
           description: Real SMTP URI (smtp:// or smtps://).
+        caCert:
+          $ref: "#/components/schemas/CaCertificate"
       required:
         - kind
         - name
@@ -4473,6 +4489,12 @@ components:
           minLength: 8
           writeOnly: true
           description: Rotates the credential (database/SMTP kinds).
+        caCert:
+          description: Replaces the CA certificate; an empty string removes it.
+          oneOf:
+            - $ref: "#/components/schemas/CaCertificate"
+            - type: string
+              const: ""
         apiKey:
           type: string
           minLength: 1

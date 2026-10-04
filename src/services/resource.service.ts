@@ -1,3 +1,4 @@
+import { X509Certificate } from "node:crypto";
 import type { Types } from "mongoose";
 import { z } from "zod";
 import { getEnv } from "../config/env.js";
@@ -38,6 +39,21 @@ const APNS_DEFAULT_HOSTS = ["api.push.apple.com:443", "api.sandbox.push.apple.co
 const HttpsUrl = z.url().refine((u) => u.startsWith("https://"), "must be an https:// URL");
 const PemPrivateKey = z.string().refine((k) => k.includes("PRIVATE KEY-----"), "must be a PEM private key");
 
+/** Public CA certificate(s) a self-hosted or private-CA database presents; trusted for that resource only. */
+const PemCertificates = z
+  .string()
+  .max(32_000)
+  .refine((pem) => {
+    const blocks = pem.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? [];
+    if (blocks.length === 0) return false;
+    try {
+      for (const b of blocks) new X509Certificate(b);
+      return true;
+    } catch {
+      return false;
+    }
+  }, "must be one or more PEM certificates (-----BEGIN CERTIFICATE-----)");
+
 /** A Google service-account JSON key file (Firebase Admin). */
 const ServiceAccountJson = z.string().refine((raw) => {
   try {
@@ -56,11 +72,36 @@ const HostPort = z.string().regex(/^[a-z0-9.-]+:\d{1,5}$/i, "use host:port, e.g.
 const Name = z.string().trim().min(1).max(60);
 
 export const CreateResourceBody = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("mongodb"), name: Name, connectionUri: z.string().min(10) }),
-  z.object({ kind: z.literal("redis"), name: Name, connectionUri: z.string().min(8) }),
-  z.object({ kind: z.literal("postgres"), name: Name, connectionUri: z.string().min(10) }),
-  z.object({ kind: z.literal("mysql"), name: Name, connectionUri: z.string().min(8) }),
-  z.object({ kind: z.literal("smtp"), name: Name, connectionUri: z.string().min(8) }),
+  z.object({
+    kind: z.literal("mongodb"),
+    name: Name,
+    connectionUri: z.string().min(10),
+    caCert: PemCertificates.optional(),
+  }),
+  z.object({
+    kind: z.literal("redis"),
+    name: Name,
+    connectionUri: z.string().min(8),
+    caCert: PemCertificates.optional(),
+  }),
+  z.object({
+    kind: z.literal("postgres"),
+    name: Name,
+    connectionUri: z.string().min(10),
+    caCert: PemCertificates.optional(),
+  }),
+  z.object({
+    kind: z.literal("mysql"),
+    name: Name,
+    connectionUri: z.string().min(8),
+    caCert: PemCertificates.optional(),
+  }),
+  z.object({
+    kind: z.literal("smtp"),
+    name: Name,
+    connectionUri: z.string().min(8),
+    caCert: PemCertificates.optional(),
+  }),
   z.object({
     kind: z.literal("http"),
     name: Name,
@@ -136,6 +177,8 @@ export const UpdateResourceBody = z.object({
   tokenUrl: z.url().optional(),
   name: Name.optional(),
   connectionUri: z.string().min(8).optional(),
+  /** "" removes a previously stored CA certificate. */
+  caCert: PemCertificates.or(z.literal("")).optional(),
   apiKey: z.string().min(1).optional(),
   upstreamUrl: z.url().optional(),
   authScheme: z.enum(["bearer", "x-api-key", "basic-password"]).optional(),
@@ -257,7 +300,13 @@ export function configAndSecret(
   }
   if (kind !== "http") {
     const uri = input.connectionUri as string | undefined;
-    if (!uri) return { config: current, secret: undefined };
+    // CA certificate: kept across updates, replaced when given, removed with "".
+    const withCa = (config: Record<string, unknown>) => {
+      const ca = input.caCert === undefined ? current.caCert : input.caCert;
+      const { caCert: _drop, ...rest } = config;
+      return ca ? { ...rest, caCert: ca } : rest;
+    };
+    if (!uri) return { config: withCa(current), secret: undefined };
     const parse = {
       mongodb: parseMongoUri,
       redis: parseRedisUri,
@@ -291,7 +340,7 @@ export function configAndSecret(
         parsed.params.get("tls") === "true" ||
         ["require", "verify-ca", "verify-full"].includes(sslmode),
     };
-    return { config, secret: uri };
+    return { config: withCa(config), secret: uri };
   }
   const config = { ...current };
   for (const key of ["upstreamUrl", "authScheme", "fakePrefix", "basePath", "redirectHosts"]) {

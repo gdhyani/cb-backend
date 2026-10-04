@@ -44,7 +44,7 @@ describe.skipIf(!PASSWORD || !fs.existsSync(CA_FILE))("mysql upstream TLS (§10.
     await mongoose.connection.db?.dropDatabase();
   });
 
-  async function scenario(connectionUri: string) {
+  async function scenario(connectionUri: string, extra: Record<string, unknown> = {}) {
     const app = server.listeners("request")[0] as never;
     const { owner, orgId } = await signupOwner(app);
     const project = await owner.post(`/api/orgs/${orgId}/projects`, { name: "Shop" });
@@ -53,6 +53,7 @@ describe.skipIf(!PASSWORD || !fs.existsSync(CA_FILE))("mysql upstream TLS (§10.
       kind: "mysql",
       name: "tls-db",
       connectionUri,
+      ...extra,
     });
     if (r.status !== 201) throw new Error(JSON.stringify(r.body));
     await owner.post(`/api/environments/${envId}/variables`, {
@@ -111,5 +112,55 @@ describe.skipIf(!PASSWORD || !fs.existsSync(CA_FILE))("mysql upstream TLS (§10.
     expect(JSON.stringify(res.body)).toMatch(/TLS|ssl=true/);
     expect(JSON.stringify(res.body)).not.toContain(PASSWORD ?? "unset");
     listener.close();
+  });
+
+  describe("per-resource CA certificate (self-hosted / private-CA clouds, production-safe)", () => {
+    const noExtraCa = () => setEnv(loadEnv(testEnvVars(backendDb.uri)));
+    const restore = () => setEnv(loadEnv({ ...testEnvVars(backendDb.uri), UPSTREAM_EXTRA_CA_FILE: CA_FILE }));
+
+    it("FR-GW-004 a private-CA server is trusted through the resource's caCert, with no global extra CA", async () => {
+      noExtraCa();
+      try {
+        const { url, listener } = await scenario(TLS_URI("?ssl=true"), {
+          caCert: fs.readFileSync(CA_FILE, "utf8"),
+        });
+        const conn = await mysql.createConnection(url);
+        const [rows] = await conn.query("SHOW STATUS LIKE 'Ssl_cipher'");
+        await conn.end();
+        expect((rows as { Value: string }[])[0]?.Value).not.toBe("");
+        listener.close();
+      } finally {
+        restore();
+      }
+    });
+
+    it("FR-GW-004 test connection also trusts the resource's caCert", async () => {
+      noExtraCa();
+      try {
+        const { owner, resourceId, listener } = await scenario(TLS_URI("?ssl=true"), {
+          caCert: fs.readFileSync(CA_FILE, "utf8"),
+        });
+        const res = await owner.post(`/api/resources/${resourceId}/test`, {});
+        expect(res.body.data).toMatchObject({ ok: true });
+        listener.close();
+      } finally {
+        restore();
+      }
+    });
+
+    it("rejects a caCert that is not a PEM certificate", async () => {
+      const app = server.listeners("request")[0] as never;
+      const { owner, orgId } = await signupOwner(app);
+      const project = await owner.post(`/api/orgs/${orgId}/projects`, { name: "Shop" });
+      const envId = project.body.data.environments[0].id as string;
+      const res = await owner.post(`/api/environments/${envId}/resources`, {
+        kind: "mysql",
+        name: "bad-ca",
+        connectionUri: TLS_URI("?ssl=true"),
+        caCert: "-----BEGIN CERTIFICATE-----\nnot a cert\n-----END CERTIFICATE-----",
+      });
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(res.body)).toMatch(/caCert/);
+    });
   });
 });
