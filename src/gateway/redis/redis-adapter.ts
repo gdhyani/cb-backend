@@ -15,7 +15,7 @@ const WRONGPASS = "-WRONGPASS invalid username-password pair or user is disabled
  * §10.8 redis: authenticate upstream with the real credentials, then intercept the client's
  * AUTH / HELLO … AUTH (verified against this device's fake) before switching to a raw pipe.
  */
-export const redisAdapter: StreamAdapter = async (client: Duplex, ctx, hooks) => {
+export const redisAdapter: StreamAdapter = async (client: Duplex, ctx, _hooks) => {
   const real = parseRedisUri(ctx.secret);
   const upstream =
     real.protocol === "rediss"
@@ -48,7 +48,8 @@ export const redisAdapter: StreamAdapter = async (client: Duplex, ctx, hooks) =>
     safeEqual(pass, fake.password) &&
     (user === undefined || user === "default" || safeEqual(user, fake.username));
 
-  hooks.onRevoke = (reason) => client.write(`-ERR cb: ${reason}\r\n`);
+  // No injected "-ERR" on revocation: an unsolicited reply corrupts client command queues
+  // (ioredis throws "Command queue state error" and crashes the app). A clean close is what clients handle.
   upstream.pipe(client);
 
   let buffer: Buffer = Buffer.alloc(0);
