@@ -334,4 +334,29 @@ describe.skipIf(!PASSWORD)("SQL, SMTP and AWS adapters through tunnels (§10.8)"
     myConn.destroy();
     for (const l of [pgL, myL, smtpL]) l.close();
   });
+
+  it("J2 test connection uses the real credentials from the gateway and never echoes them", async () => {
+    const { ids, owner, envId } = await scenario();
+    for (const id of [ids.pg, ids.mysql, ids.smtp, ids.s3]) {
+      const res = await owner.post(`/api/resources/${id}/test`, {});
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ ok: true, profile: "default" });
+      expect(JSON.stringify(res.body)).not.toContain(PASSWORD);
+    }
+    const pgResult = await owner.post(`/api/resources/${ids.pg}/test`, {});
+    expect(pgResult.body.data.message).toMatch(/Connected as shop_admin/);
+
+    const bad = await owner.post(`/api/environments/${envId}/resources`, {
+      kind: "postgres",
+      name: "wrong-password-db",
+      connectionUri: "postgresql://shop_admin:definitely-wrong-pw-123@127.0.0.1:5433/shop",
+    });
+    const failed = await owner.post(`/api/resources/${bad.body.data.id}/test`, {});
+    expect(failed.body.data.ok).toBe(false);
+    expect(failed.body.data.message).toMatch(/password authentication failed/);
+    expect(failed.body.data.message).not.toContain("definitely-wrong-pw-123");
+
+    const missing = await owner.post(`/api/resources/${ids.pg}/test`, { profile: "nope" });
+    expect(missing.status).toBe(404);
+  });
 });

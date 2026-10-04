@@ -1,0 +1,198 @@
+[
+  {
+    "id": "openai",
+    "name": "OpenAI",
+    "category": "AI",
+    "kind": "http",
+    "description": "OpenAI SDKs read OPENAI_BASE_URL, so traffic goes through a local listener.",
+    "defaults": {
+      "upstreamUrl": "https://api.openai.com",
+      "authScheme": "bearer",
+      "fakePrefix": "sk-cb-",
+      "basePath": "/v1",
+      "redirectHosts": ["api.openai.com:443"]
+    },
+    "secretPlaceholder": "sk-proj-…",
+    "variables": [
+      { "key": "OPENAI_API_KEY", "field": "key" },
+      { "key": "OPENAI_BASE_URL", "field": "baseUrl" }
+    ]
+  },
+  {
+    "id": "anthropic",
+    "name": "Anthropic",
+    "category": "AI",
+    "kind": "http",
+    "description": "Anthropic SDKs send the key in x-api-key and read ANTHROPIC_BASE_URL.",
+    "defaults": {
+      "upstreamUrl": "https://api.anthropic.com",
+      "authScheme": "x-api-key",
+      "fakePrefix": "sk-ant-cb-",
+      "basePath": "",
+      "redirectHosts": ["api.anthropic.com:443"]
+    },
+    "secretPlaceholder": "sk-ant-…",
+    "variables": [
+      { "key": "ANTHROPIC_API_KEY", "field": "key" },
+      { "key": "ANTHROPIC_BASE_URL", "field": "baseUrl" }
+    ]
+  },
+  {
+    "id": "stripe",
+    "name": "Stripe",
+    "category": "Payments",
+    "kind": "http",
+    "description": "The Stripe SDK has a fixed host, so api.stripe.com is redirected (Layer 2).",
+    "defaults": {
+      "upstreamUrl": "https://api.stripe.com",
+      "authScheme": "bearer",
+      "fakePrefix": "sk_test_cb_",
+      "basePath": "",
+      "redirectHosts": ["api.stripe.com:443"]
+    },
+    "secretPlaceholder": "sk_live_… or sk_test_…",
+    "variables": [{ "key": "STRIPE_SECRET_KEY", "field": "key" }]
+  },
+  {
+    "id": "razorpay",
+    "name": "Razorpay",
+    "category": "Payments",
+    "kind": "http",
+    "description": "Basic auth: the key id stays a plain variable, the key secret is brokered.",
+    "defaults": {
+      "upstreamUrl": "https://api.razorpay.com",
+      "authScheme": "basic-password",
+      "fakePrefix": "cb_",
+      "basePath": "",
+      "redirectHosts": ["api.razorpay.com:443"]
+    },
+    "secretPlaceholder": "Razorpay key secret",
+    "variables": [{ "key": "RAZORPAY_KEY_SECRET", "field": "key" }],
+    "plainVariables": [{ "key": "RAZORPAY_KEY_ID", "hint": "Your rzp_… key id (not secret)" }]
+  },
+  {
+    "id": "google-oauth",
+    "name": "Google sign-in",
+    "category": "Auth",
+    "kind": "oauth",
+    "description": "The client secret is swapped at Google's token endpoint; the client id stays plain.",
+    "defaults": { "tokenUrl": "https://oauth2.googleapis.com/token" },
+    "secretPlaceholder": "GOCSPX-…",
+    "variables": [{ "key": "GOOGLE_CLIENT_SECRET", "field": "clientSecret" }],
+    "plainVariables": [{ "key": "GOOGLE_CLIENT_ID", "hint": "…apps.googleusercontent.com" }]
+  },
+  {
+    "id": "github-oauth",
+    "name": "GitHub sign-in",
+    "category": "Auth",
+    "kind": "oauth",
+    "description": "The client secret is swapped at GitHub's token endpoint.",
+    "defaults": { "tokenUrl": "https://github.com/login/oauth/access_token" },
+    "secretPlaceholder": "GitHub OAuth client secret",
+    "variables": [{ "key": "GITHUB_CLIENT_SECRET", "field": "clientSecret" }],
+    "plainVariables": [{ "key": "GITHUB_CLIENT_ID", "hint": "Iv1.…" }]
+  },
+  {
+    "id": "firebase",
+    "name": "Firebase Admin",
+    "category": "Push",
+    "kind": "google-sa",
+    "description": "Firebase Admin / FCM with a per-device fake service-account key.",
+    "defaults": {},
+    "secretPlaceholder": "Service-account JSON",
+    "variables": [
+      { "key": "FIREBASE_PROJECT_ID", "field": "projectId" },
+      { "key": "FIREBASE_CLIENT_EMAIL", "field": "clientEmail" },
+      { "key": "FIREBASE_PRIVATE_KEY", "field": "privateKey" }
+    ]
+  },
+  {
+    "id": "apns",
+    "name": "Apple Push",
+    "category": "Push",
+    "kind": "apns",
+    "description": "Token-based APNs; apps sign with a fake .p8 that the gateway re-signs.",
+    "defaults": {},
+    "secretPlaceholder": "-----BEGIN PRIVATE KEY-----",
+    "variables": [
+      { "key": "APNS_KEY", "field": "key" },
+      { "key": "APNS_KEY_ID", "field": "keyId" },
+      { "key": "APNS_TEAM_ID", "field": "teamId" }
+    ]
+  },
+  {
+    "id": "aws-s3",
+    "name": "AWS S3",
+    "category": "Storage",
+    "kind": "aws",
+    "description": "Requests and presigned URLs are re-signed with the real keys.",
+    "defaults": { "region": "us-east-1", "endpoint": "https://s3.us-east-1.amazonaws.com" },
+    "secretPlaceholder": "AWS secret access key",
+    "variables": [
+      { "key": "AWS_ACCESS_KEY_ID", "field": "accessKeyId" },
+      { "key": "AWS_SECRET_ACCESS_KEY", "field": "secretAccessKey" },
+      { "key": "AWS_ENDPOINT_URL", "field": "endpoint" },
+      { "key": "AWS_REGION", "field": "region" }
+    ]
+  },
+  {
+    "id": "cloudflare-r2",
+    "name": "Cloudflare R2",
+    "category": "Storage",
+    "kind": "aws",
+    "description": "S3-compatible; replace <account-id> in the endpoint.",
+    "defaults": { "region": "auto", "endpoint": "https://<account-id>.r2.cloudflarestorage.com" },
+    "secretPlaceholder": "R2 secret access key",
+    "variables": [
+      { "key": "AWS_ACCESS_KEY_ID", "field": "accessKeyId" },
+      { "key": "AWS_SECRET_ACCESS_KEY", "field": "secretAccessKey" },
+      { "key": "AWS_ENDPOINT_URL", "field": "endpoint" },
+      { "key": "AWS_REGION", "field": "region" }
+    ]
+  },
+  {
+    "id": "sendgrid-smtp",
+    "name": "SendGrid (SMTP)",
+    "category": "Email",
+    "kind": "smtp",
+    "description": "SMTP with the API key as password (user is literally \"apikey\").",
+    "defaults": {},
+    "secretPlaceholder": "smtp://apikey:SG.…@smtp.sendgrid.net:587",
+    "variables": [
+      { "key": "SMTP_HOST", "field": "host" },
+      { "key": "SMTP_PORT", "field": "port" },
+      { "key": "SMTP_USER", "field": "user" },
+      { "key": "SMTP_PASS", "field": "password" }
+    ]
+  },
+  {
+    "id": "postgres",
+    "name": "PostgreSQL",
+    "category": "Database",
+    "kind": "postgres",
+    "description": "Neon, Supabase, RDS or self-hosted Postgres.",
+    "defaults": {},
+    "secretPlaceholder": "postgresql://user:password@host:5432/db?sslmode=require",
+    "variables": [{ "key": "DATABASE_URL", "field": "url" }]
+  },
+  {
+    "id": "mongodb",
+    "name": "MongoDB",
+    "category": "Database",
+    "kind": "mongodb",
+    "description": "Single-host MongoDB with SCRAM-SHA-256 (mongodb+srv later).",
+    "defaults": {},
+    "secretPlaceholder": "mongodb://user:password@host:27017/db?authSource=admin",
+    "variables": [{ "key": "MONGODB_URI", "field": "url" }]
+  },
+  {
+    "id": "redis",
+    "name": "Redis",
+    "category": "Database",
+    "kind": "redis",
+    "description": "Redis with a password or ACL user.",
+    "defaults": {},
+    "secretPlaceholder": "redis://user:password@host:6379/0",
+    "variables": [{ "key": "REDIS_URL", "field": "url" }]
+  }
+]
