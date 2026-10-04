@@ -116,11 +116,13 @@ describe("mongodb auth gate (S7, FR-GW-002): untrusted input before authenticati
     expect(sent.includes(Buffer.from("compression"))).toBe(false);
   });
 
-  it("FR-GW-002 hello reaches the upstream without speculativeAuthenticate, saslSupportedMechs or compression", async () => {
+  it("FR-GW-002 hello reaches the upstream without speculativeAuthenticate, saslSupportedMechs, compression or client metadata", async () => {
     const { app, upstream } = setup();
     app.feed(
       opMsg({
         hello: 1,
+        // The gateway already sent the connection's first hello (primary discovery); metadata is only allowed there.
+        client: { driver: { name: "nodejs", version: "7" } },
         speculativeAuthenticate: { saslStart: 1, mechanism: "SCRAM-SHA-256" },
         saslSupportedMechs: "admin.cbu_abcdefgh",
         compression: ["zlib"],

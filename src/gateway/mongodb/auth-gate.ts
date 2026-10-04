@@ -15,7 +15,8 @@ import { type ScramMaterial, ScramServer } from "./scram-server.js";
 const HELLO = new Set(["hello", "ismaster", "isMaster"]);
 /** MongoDB's maxMessageSizeBytes; anything larger (or smaller than a header) is not a real message. */
 const MAX_MESSAGE = 48_000_000;
-const STRIP = ["speculativeAuthenticate", "saslSupportedMechs", "compression"] as const;
+// `client` metadata is allowed only in a connection's first hello, which the gateway already sent (primary discovery).
+const STRIP = ["speculativeAuthenticate", "saslSupportedMechs", "compression", "client"] as const;
 const AUTH_FAILED = { ok: 0, errmsg: "Authentication failed.", code: 18, codeName: "AuthenticationFailed" };
 const NEEDS_AUTH = { ok: 0, errmsg: "command requires authentication", code: 13, codeName: "Unauthorized" };
 

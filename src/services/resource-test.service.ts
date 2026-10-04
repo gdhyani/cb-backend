@@ -15,7 +15,7 @@ import { AppError } from "../errors/app-error.js";
 import { injectCredential } from "../gateway/http/http-adapter.js";
 import { upstreamCa, upstreamDispatcher } from "../gateway/http/upstream.js";
 import { type ResourceKind, ResourceModel } from "../models/resource.model.js";
-import { MYSQL_TLS_HINT } from "../utils/connection-uri.js";
+import { MYSQL_TLS_HINT, parseMongoUri } from "../utils/connection-uri.js";
 import { requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { DEFAULT_PROFILE, readProfileSecret } from "./profile.service.js";
@@ -96,11 +96,13 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
     }
   },
   async mongodb(secret, config) {
-    const caFile = getEnv().UPSTREAM_EXTRA_CA_FILE;
+    const target = parseMongoUri(secret);
     const client = new MongoClient(secret, {
       serverSelectionTimeoutMS: TIMEOUT_MS,
-      directConnection: true,
-      ...(tlsWanted(config) && caFile ? { tlsCAFile: caFile } : {}),
+      // A single host is tested directly; replica sets and mongodb+srv go through normal discovery.
+      ...(!target.srv && target.hosts.length === 1 ? { directConnection: true } : {}),
+      // System roots plus the test-only extra CA (a CA file alone would replace the public roots).
+      ...(tlsWanted(config) && upstreamCa() ? { ca: upstreamCa() } : {}),
     });
     try {
       await client.connect();
