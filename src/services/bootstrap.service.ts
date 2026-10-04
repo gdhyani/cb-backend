@@ -141,8 +141,11 @@ export async function buildBootstrap(
         const scope = { deviceId: auth.deviceId, environmentId: envId, resourceId: r._id.toHexString() };
         const config = (r.config ?? {}) as Record<string, unknown> & HttpConfig;
         if (r.kind === "mongodb" && v.field === "url") {
+          // S7: the gateway verifies this per-device fake as a SCRAM-SHA-256 server before relaying.
+          const fake = fakeDbCredentials(scope);
           listenerFor(r).env[v.key] =
-            `mongodb://127.0.0.1:{port}/${String(config.database ?? "test")}?directConnection=true`;
+            `mongodb://${fake.username}:${fake.password}@127.0.0.1:{port}/${String(config.database ?? "test")}` +
+            "?directConnection=true&authSource=admin&authMechanism=SCRAM-SHA-256";
         } else if (r.kind === "redis" && v.field === "url") {
           const fake = fakeRedisCredentials(scope);
           const db = config.database && config.database !== "0" ? `/${String(config.database)}` : "";
