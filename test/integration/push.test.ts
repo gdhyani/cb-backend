@@ -32,6 +32,7 @@ const CLIENT_EMAIL = "firebase-adminsdk@cb-shop.iam.gserviceaccount.com";
 const REAL_ACCESS_TOKEN = "ya29.REAL_GOOGLE_ACCESS_TOKEN_5521";
 const KEY_ID = "ABC123DEFG";
 const TEAM_ID = "TEAM456XYZ";
+const OAUTH_SECRET = "REAL_GOOGLE_OAUTH_CLIENT_SECRET_77";
 const SERVICE_ACCOUNT = JSON.stringify({
   type: "service_account",
   project_id: "cb-shop",
@@ -50,7 +51,12 @@ beforeAll(async () => {
   [backendDb, upstream] = await Promise.all([
     startMemoryMongo(),
     startMockPush({
-      google: { clientEmail: CLIENT_EMAIL, publicPem: google.publicKey, accessToken: REAL_ACCESS_TOKEN },
+      google: {
+        clientEmail: CLIENT_EMAIL,
+        publicPem: google.publicKey,
+        accessToken: REAL_ACCESS_TOKEN,
+        oauthClientSecret: OAUTH_SECRET,
+      },
       apns: { keyId: KEY_ID, teamId: TEAM_ID, publicPem: apple.publicKey },
     }),
   ]);
@@ -72,7 +78,7 @@ beforeEach(async () => {
   await mongoose.connection.db?.dropDatabase();
 });
 
-async function scenario() {
+async function scenario(withOauth = false) {
   const app = server.listeners("request")[0] as never;
   const { owner, orgId } = await signupOwner(app);
   const project = await owner.post(`/api/orgs/${orgId}/projects`, { name: "Push" });
@@ -93,12 +99,26 @@ async function scenario() {
     upstreamUrl: upstream.url,
   });
   if (apns.status !== 201) throw new Error(JSON.stringify(apns.body));
+  // Google sign-in client on the SAME host as the service account (oauth2.googleapis.com:443).
+  const oauth = withOauth
+    ? await owner.post(`/api/environments/${envId}/resources`, {
+        kind: "oauth",
+        name: "google-sign-in",
+        tokenUrl: "https://oauth2.googleapis.com/token",
+        upstreamUrl: upstream.url,
+        clientSecret: OAUTH_SECRET,
+      })
+    : undefined;
+  if (oauth && oauth.status !== 201) throw new Error(JSON.stringify(oauth.body));
   const vars: [string, string, string][] = [
     ["FIREBASE_SERVICE_ACCOUNT", fcm.body.data.id, "credentialsJson"],
     ["FIREBASE_PRIVATE_KEY", fcm.body.data.id, "privateKey"],
     ["APNS_KEY", apns.body.data.id, "key"],
     ["APNS_KEY_ID", apns.body.data.id, "keyId"],
     ["APNS_TEAM_ID", apns.body.data.id, "teamId"],
+    ...(oauth
+      ? ([["GOOGLE_CLIENT_SECRET", oauth.body.data.id, "clientSecret"]] as [string, string, string][])
+      : []),
   ];
   for (const [key, resourceId, field] of vars)
     await owner.post(`/api/environments/${envId}/variables`, { type: "brokered", key, resourceId, field });
@@ -253,6 +273,44 @@ describe("google-sa and apns adapters (§10.8, FR-CRY-004)", () => {
     const forged = await push(jwt(other.export({ type: "pkcs8", format: "pem" }).toString()));
     expect(forged.status).toBe(403);
     expect(JSON.parse(forged.body).reason).toBe("InvalidProviderToken");
+    session.close();
+  });
+
+  it("FR-GW-003 routes each request on a shared host to its own resource (Google sign-in + Firebase)", async () => {
+    const { token, envId, boot } = await scenario(true);
+    const form = (fields: Record<string, string>) => new URLSearchParams(fields).toString();
+    const session = h2Through(token, envId, "oauth2.googleapis.com", boot.orgCaCert);
+    const post = (body: string) =>
+      send(session, { ":path": "/token", "content-type": "application/x-www-form-urlencoded" }, body);
+
+    // Service-account assertion → Firebase resource (real assertion minted, fake access token back).
+    const now = Math.floor(Date.now() / 1000);
+    const assertion = signJwt("RS256", boot.plain.FIREBASE_PRIVATE_KEY, {
+      iss: CLIENT_EMAIL,
+      scope: "https://www.googleapis.com/auth/firebase.messaging",
+      aud: "https://oauth2.googleapis.com/token",
+      iat: now,
+      exp: now + 3600,
+    });
+    const sa = await post(form({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion }));
+    expect(sa.status).toBe(200);
+    expect(JSON.parse(sa.body).access_token).toMatch(/^ya29\.cb_/);
+
+    // Same tunnel, client-secret exchange → OAuth resource (fake secret swapped for the real one, echo redacted).
+    const fakeSecret = boot.plain.GOOGLE_CLIENT_SECRET as string;
+    const signIn = await post(
+      form({ grant_type: "authorization_code", code: "c", client_id: "web", client_secret: fakeSecret }),
+    );
+    expect(signIn.status).toBe(200);
+    expect(JSON.parse(signIn.body).access_token).toBe("user-access-token");
+    expect(signIn.body).not.toContain(OAUTH_SECRET);
+    expect(upstream.seen.some((r) => r.body.includes(`client_secret=${OAUTH_SECRET}`))).toBe(true);
+
+    // A forged client secret is still refused by the OAuth resource.
+    const forged = await post(
+      form({ grant_type: "authorization_code", code: "c", client_id: "web", client_secret: "cb-nope" }),
+    );
+    expect(forged.status).toBe(401);
     session.close();
   });
 });

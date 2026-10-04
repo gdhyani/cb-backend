@@ -7,7 +7,7 @@ import { createCa, mintLeaf } from "../../src/crypto/ca.js";
 import { verifyJwt } from "../../src/crypto/jwt.js";
 
 export interface MockPushOptions {
-  google: { clientEmail: string; publicPem: string; accessToken: string };
+  google: { clientEmail: string; publicPem: string; accessToken: string; oauthClientSecret?: string };
   apns: { keyId: string; teamId: string; publicPem: string };
 }
 
@@ -38,7 +38,20 @@ export async function startMockPush(opts: MockPushOptions) {
           res.end(JSON.stringify(value));
         };
         if (url === "/token") {
-          const assertion = new URLSearchParams(body).get("assertion") ?? "";
+          const form = new URLSearchParams(body);
+          // OAuth client flow (Google sign-in): only the real client secret is accepted.
+          if (form.has("client_secret")) {
+            const ok =
+              opts.google.oauthClientSecret && form.get("client_secret") === opts.google.oauthClientSecret;
+            return ok
+              ? json(200, {
+                  access_token: "user-access-token",
+                  token_type: "Bearer",
+                  echo: `secret was ${form.get("client_secret")}`,
+                })
+              : json(401, { error: "invalid_client" });
+          }
+          const assertion = form.get("assertion") ?? "";
           const jwt = verifyJwt(assertion, "RS256", opts.google.publicPem);
           if (!jwt || jwt.payload.iss !== opts.google.clientEmail)
             return json(400, { error: "invalid_grant" });

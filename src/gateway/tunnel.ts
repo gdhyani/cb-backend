@@ -20,6 +20,7 @@ import { eventConcerns, revalidate } from "../services/runtime-access.service.js
 import { createApnsHandler } from "./http/apns-adapter.js";
 import { createAwsHandler } from "./http/aws-adapter.js";
 import { createGoogleSaHandler } from "./http/google-sa-adapter.js";
+import { createHostRouter } from "./http/host-router.js";
 import { createHttpHandler, deniedHandler, type Handler, serveHttp1, serveTls } from "./http/http-adapter.js";
 import { createOAuthHandler } from "./http/oauth-adapter.js";
 import { mongodbAdapter } from "./mongodb/mongodb-adapter.js";
@@ -121,15 +122,19 @@ async function handleTunnel(
     return;
   }
   const hostPort = params.layer === "2" ? `${params.host.toLowerCase()}:${params.port}` : undefined;
-  const resource =
+  // Layer 2: every resource that claims this host; requests are routed among them (FR-GW-003).
+  const candidates =
     params.layer === "1"
-      ? await ResourceModel.findOne({ _id: params.resource, environmentId: env._id, disabledAt: null }).lean()
-      : await ResourceModel.findOne({
+      ? await ResourceModel.find({ _id: params.resource, environmentId: env._id, disabledAt: null }).lean()
+      : await ResourceModel.find({
           environmentId: env._id,
           kind: { $in: [...LAYER2_KINDS] },
           disabledAt: null,
           "config.redirectHosts": hostPort,
-        }).lean();
+        })
+          .sort({ createdAt: 1 })
+          .lean();
+  const resource = candidates[0];
   if (!resource) {
     ws.close(CloseCode.Forbidden, "no resource for this tunnel");
     return;
@@ -161,34 +166,44 @@ async function handleTunnel(
     return;
   }
 
-  const profile = await resolveProfile(auth.userId, env._id.toHexString(), resource._id.toHexString());
-  const secret =
-    profile === DEFAULT_PROFILE
-      ? await readResourceSecret(resource._id)
-      : await readProfileSecret(resource._id, profile);
-  if (secret === undefined) {
-    ws.close(CloseCode.Forbidden, closeReason(`credential profile "${profile}" no longer exists`));
-    return;
-  }
-  const ctx: TunnelContext = {
-    id: randomUUID(),
-    layer: params.layer === "1" ? 1 : 2,
-    userId: auth.userId,
-    deviceId: auth.deviceId,
-    environmentId: env._id.toHexString(),
-    projectId: env.projectId.toHexString(),
-    orgId: env.orgId.toHexString(),
-    resource: {
-      id: resource._id.toHexString(),
-      kind: resource.kind as ResourceKind,
-      name: resource.name,
-      config: (resource.config as Record<string, unknown>) ?? {},
-    },
-    secret,
-    profile,
-    host: params.layer === "2" ? params.host : undefined,
-    port: params.layer === "2" ? params.port : undefined,
+  /** Per-resource context: the real credential of the profile this user is assigned (FR-GW-005, J2). */
+  const deviceId = auth.deviceId;
+  const contextFor = async (r: (typeof candidates)[number]): Promise<TunnelContext | string> => {
+    const profile = await resolveProfile(auth.userId, env._id.toHexString(), r._id.toHexString());
+    const secret =
+      profile === DEFAULT_PROFILE ? await readResourceSecret(r._id) : await readProfileSecret(r._id, profile);
+    if (secret === undefined) return `credential profile "${profile}" no longer exists`;
+    return {
+      id: randomUUID(),
+      layer: params.layer === "1" ? 1 : 2,
+      userId: auth.userId,
+      deviceId,
+      environmentId: env._id.toHexString(),
+      projectId: env.projectId.toHexString(),
+      orgId: env.orgId.toHexString(),
+      resource: {
+        id: r._id.toHexString(),
+        kind: r.kind as ResourceKind,
+        name: r.name,
+        config: (r.config as Record<string, unknown>) ?? {},
+      },
+      secret,
+      profile,
+      host: params.layer === "2" ? params.host : undefined,
+      port: params.layer === "2" ? params.port : undefined,
+    };
   };
+  const contexts: TunnelContext[] = [];
+  for (const r of candidates) {
+    const c = await contextFor(r);
+    if (typeof c === "string") {
+      ws.close(CloseCode.Forbidden, closeReason(c));
+      return;
+    }
+    contexts.push(c);
+  }
+  const ctx = contexts[0] as TunnelContext;
+  const profile = ctx.profile;
 
   let bytesIn = 0;
   let bytesOut = 0;
@@ -208,14 +223,20 @@ async function handleTunnel(
   void recordAudit({
     ...audit,
     action: "tunnel.opened",
-    meta: { layer: ctx.layer, kind: resource.kind, host: ctx.host, profile },
+    meta: {
+      layer: ctx.layer,
+      kind: resource.kind,
+      host: ctx.host,
+      profile,
+      ...(contexts.length > 1 ? { sharedWith: contexts.slice(1).map((c) => c.resource.name) } : {}),
+    },
   });
   logger.info(
     `tunnel ${ctx.id.slice(0, 8)} opened ${resource.kind}:${resource.name} layer=${ctx.layer} user=${auth.userId}`,
   );
   ws.on("close", (code) => {
     live.delete(ctx.id);
-    ctx.secret = "";
+    for (const c of contexts) c.secret = "";
     void recordAudit({
       ...audit,
       action: "tunnel.closed",
@@ -226,7 +247,15 @@ async function handleTunnel(
   try {
     const createHandler = HTTP_HANDLERS[resource.kind as ResourceKind];
     if (createHandler) {
-      const handler = createHandler(ctx);
+      const handler =
+        contexts.length > 1
+          ? createHostRouter(
+              contexts.map((c) => ({
+                ctx: c,
+                handler: (HTTP_HANDLERS[c.resource.kind] ?? createHttpHandler)(c),
+              })),
+            )
+          : createHandler(ctx);
       if (ctx.layer === 1) serveHttp1(stream, handler);
       else serveTls(stream, await leavesFor(env.orgId), handler);
       return;
