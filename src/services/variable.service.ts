@@ -135,6 +135,7 @@ export async function createVariable(
   actorId: string,
   envId: Types.ObjectId,
   input: z.infer<typeof CreateVariableBody>,
+  opts: { touch?: boolean } = {},
 ): Promise<VariableDto> {
   const { env } = await loadEnvironment(actorId, envId, "admin");
   if (await VariableModel.exists({ environmentId: envId, key: input.key })) {
@@ -165,7 +166,7 @@ export async function createVariable(
     Object.assign(doc, { resourceId: input.resourceId, field: input.field });
   }
   const created = await VariableModel.create(doc);
-  await touchEnvironment(envId);
+  if (opts.touch !== false) await touchEnvironment(envId);
   await recordAudit({
     orgId: env.orgId,
     actorId,

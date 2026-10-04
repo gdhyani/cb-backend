@@ -1955,6 +1955,55 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/environments/{envId}/services:
+    post:
+      operationId: createService
+      tags:
+        - Resources
+      summary: Create a service and its variables in one step (admin); tested first, nothing saved on failure
+      description: >-
+        D1. Validates every key, applies the preset defaults, runs a connection test from the gateway (unless
+        test is false), then creates the hidden service (name derived from the key), the main brokered variable
+        and the extra keys. Any failure leaves nothing behind.
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/envId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateServiceBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ServiceCreated"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ServiceTestFailed"
   /api/environments/{envId}/variables:
     get:
       operationId: listVariables
@@ -2734,6 +2783,19 @@ components:
               message: The requested resource was not found.
               statusCode: 404
               correlationId: c0ffee12-0000-4000-8000-000000000000
+    ServiceTestFailed:
+      description: SERVICE_TEST_FAILED — the connection test failed; nothing was saved (message is scrubbed of secrets)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            success: false
+            error:
+              code: SERVICE_TEST_FAILED
+              message: connect ECONNREFUSED 127.0.0.1:6379
+              statusCode: 422
+              correlationId: c0ffee12-0000-4000-8000-000000000000
     Conflict:
       description: CONFLICT, EMAIL_TAKEN or LAST_OWNER
       content:
@@ -2836,6 +2898,71 @@ components:
           type: integer
           minimum: 0
       required: [version, activeTunnels]
+    CreateServiceBody:
+      type: object
+      description: >-
+        D1 one-step setup. `resource` holds the Create*Resource fields for its kind without `name`; secret fields
+        inside it are write-only. Fake values and fake prefixes are never accepted from clients beyond the presets.
+      properties:
+        key:
+          type: string
+          pattern: ^[A-Z_][A-Z0-9_]*$
+          description: The main variable's key, chosen by the admin (D2).
+        preset:
+          type: string
+          description: Preset id from GET /api/presets; its defaults are applied first.
+        mainField:
+          type: string
+          description: Brokered field for the main variable; defaults to the kind's secret field (url, key, clientSecret, secretAccessKey, credentialsJson).
+        extras:
+          type: array
+          maxItems: 10
+          items:
+            oneOf:
+              - type: object
+                properties:
+                  key:
+                    type: string
+                    pattern: ^[A-Z_][A-Z0-9_]*$
+                  field:
+                    type: string
+                required: [key, field]
+              - type: object
+                properties:
+                  key:
+                    type: string
+                    pattern: ^[A-Z_][A-Z0-9_]*$
+                  value:
+                    type: string
+                    maxLength: 10000
+                required: [key, value]
+          default: []
+        test:
+          type: boolean
+          default: true
+        resource:
+          type: object
+          writeOnly: true
+          properties:
+            kind:
+              $ref: "#/components/schemas/ResourceKind"
+          required: [kind]
+          additionalProperties: true
+      required: [key, resource]
+    ServiceCreated:
+      type: object
+      properties:
+        service:
+          $ref: "#/components/schemas/Resource"
+        variables:
+          type: array
+          items:
+            $ref: "#/components/schemas/Variable"
+        test:
+          oneOf:
+            - $ref: "#/components/schemas/ResourceTestResult"
+            - type: "null"
+      required: [service, variables, test]
     ResourceTestResult:
       type: object
       properties:

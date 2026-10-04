@@ -37,6 +37,20 @@ export const BROKERED_FIELDS: Record<ResourceKind, readonly string[]> = {
   apns: ["key", "keyId", "teamId"],
 };
 
+/** The variable that carries a service's secret: the one the admin names in "Add variable" (D2). */
+export const MAIN_FIELD: Record<ResourceKind, string> = {
+  mongodb: "url",
+  redis: "url",
+  postgres: "url",
+  mysql: "url",
+  smtp: "url",
+  http: "key",
+  oauth: "clientSecret",
+  aws: "secretAccessKey",
+  "google-sa": "credentialsJson",
+  apns: "key",
+};
+
 const GOOGLE_DEFAULT_HOSTS = ["oauth2.googleapis.com:443", "fcm.googleapis.com:443"];
 const APNS_DEFAULT_HOSTS = ["api.push.apple.com:443", "api.sandbox.push.apple.com:443"];
 const HttpsUrl = HttpsOnlyUrl;
@@ -383,6 +397,7 @@ export async function createResource(
   actorId: string,
   envId: Types.ObjectId,
   input: z.infer<typeof CreateResourceBody>,
+  opts: { touch?: boolean } = {},
 ): Promise<ResourceDto> {
   const { env } = await loadEnvironment(actorId, envId, "admin");
   if (await ResourceModel.exists({ environmentId: envId, name: input.name })) {
@@ -402,7 +417,7 @@ export async function createResource(
     credentials: encryptSecret(masterKey(), secret),
     rotatedAt: new Date(),
   });
-  await touchEnvironment(envId);
+  if (opts.touch !== false) await touchEnvironment(envId);
   await recordAudit({
     orgId: env.orgId,
     actorId,

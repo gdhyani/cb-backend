@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   createGrantHandler,
   createResourceHandler,
+  createServiceHandler,
   createVariableHandler,
   deleteEnvironmentHandler,
   getEnvironmentHandler,
@@ -34,6 +35,7 @@ environmentRoutes.patch("/environments/:envId", updateEnvironmentHandler);
 environmentRoutes.delete("/environments/:envId", deleteEnvironmentHandler);
 environmentRoutes.get("/environments/:envId/resources", listResourcesHandler);
 environmentRoutes.post("/environments/:envId/resources", createResourceHandler);
+environmentRoutes.post("/environments/:envId/services", createServiceHandler);
 environmentRoutes.get("/environments/:envId/variables", listVariablesHandler);
 environmentRoutes.post("/environments/:envId/variables", createVariableHandler);
 environmentRoutes.get("/environments/:envId/preview", previewHandler);

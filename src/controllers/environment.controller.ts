@@ -4,6 +4,7 @@ import { authOf } from "../middlewares/auth.middleware.js";
 import * as environmentService from "../services/environment.service.js";
 import * as grantService from "../services/grant.service.js";
 import * as resourceService from "../services/resource.service.js";
+import * as serviceSetup from "../services/service-setup.service.js";
 import * as variableService from "../services/variable.service.js";
 import { toObjectId } from "../utils/ids.js";
 import { sendSuccess } from "../utils/response.js";
@@ -93,5 +94,14 @@ export async function createGrantHandler(req: Request, res: Response, next: Next
     sendSuccess(res, await grantService.createGrant(authOf(res).userId, envIdOf(req), input), 201);
   } catch (err) {
     next(toAppError(err, "environment.controller.createGrant: failed to grant access"));
+  }
+}
+
+export async function createServiceHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const input = serviceSetup.CreateServiceBody.parse(req.body);
+    sendSuccess(res, await serviceSetup.createService(authOf(res).userId, envIdOf(req), input), 201);
+  } catch (err) {
+    next(toAppError(err, "environment.controller.createService: failed to set up service"));
   }
 }

@@ -24,3 +24,7 @@ const PRESETS: Preset[] = z.array(PresetSchema).parse(raw);
 export function listPresets(): Preset[] {
   return PRESETS;
 }
+
+export function getPreset(id: string): Preset | undefined {
+  return PRESETS.find((p) => p.id === id);
+}
