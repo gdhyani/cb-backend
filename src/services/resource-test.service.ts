@@ -59,8 +59,11 @@ const tlsWanted = (config: Record<string, unknown>) => config.tls === true;
 
 const testers: Record<ResourceKind, (secret: string, config: Record<string, unknown>) => Promise<Outcome>> = {
   async postgres(secret, config) {
+    // pg lets sslmode/sslrootcert in the URI override the ssl option, which would drop our verified CA list.
+    const url = new URL(secret);
+    for (const k of ["sslmode", "sslrootcert", "sslcert", "sslkey", "ssl"]) url.searchParams.delete(k);
     const client = new pg.Client({
-      connectionString: secret,
+      connectionString: url.toString(),
       connectionTimeoutMillis: TIMEOUT_MS,
       ...(tlsWanted(config) ? { ssl: { ca: upstreamCa(config.caCert), rejectUnauthorized: true } } : {}),
     });

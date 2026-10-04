@@ -54,6 +54,22 @@ services:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -ushop_admin -p\"$$MYSQL_PASSWORD\" --silent"]
       interval: 3s
       retries: 40
+  # TLS-only Postgres; certificates from scripts/test-certs.sh.
+  postgres-tls:
+    image: postgres:16
+    ports: ["5435:5432"]
+    environment:
+      POSTGRES_USER: shop_admin
+      POSTGRES_PASSWORD: ${CB_TEST_DB_PASSWORD:?set CB_TEST_DB_PASSWORD in your shell}
+      POSTGRES_DB: shop
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      POSTGRES_INITDB_ARGS: --auth=scram-sha-256
+    volumes: ["./test-certs:/tls:ro"]
+    entrypoint: ["sh", "-c", "cp /tls/server.key /tls/server.pem /tmp/ && chown postgres /tmp/server.key /tmp/server.pem && chmod 600 /tmp/server.key && exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/tmp/server.pem -c ssl_key_file=/tmp/server.key"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shop_admin -d shop"]
+      interval: 3s
+      retries: 30
   mailpit:
     image: axllent/mailpit:latest
     ports: ["1026:1025", "8026:8025"]
