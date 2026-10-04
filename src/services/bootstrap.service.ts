@@ -150,6 +150,16 @@ export async function buildBootstrap(
           if (value !== undefined) listenerFor(r).env[v.key] = value;
         } else if (r.kind === "http" && v.field === "baseUrl") {
           listenerFor(r).env[v.key] = `http://127.0.0.1:{port}${config.basePath ?? ""}`;
+        } else if (r.kind === "oauth" && v.field === "clientSecret") {
+          plain[v.key] = fakeApiKey(scope, "cb-");
+          for (const hp of config.redirectHosts ?? []) {
+            const i = hp.lastIndexOf(":");
+            redirects.set(hp, {
+              host: hp.slice(0, i),
+              port: Number(hp.slice(i + 1)),
+              resourceId: r._id.toHexString(),
+            });
+          }
         } else if (r.kind === "http" && v.field === "key") {
           plain[v.key] = fakeApiKey(scope, config.fakePrefix ?? "cb_");
           for (const hp of config.redirectHosts ?? []) {

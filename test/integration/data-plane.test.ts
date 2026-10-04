@@ -26,6 +26,7 @@ import { startRedis } from "../helpers/redis-server.js";
 const MONGO_PW = "REAL_MONGO_PW_7731";
 const REDIS_PW = "REAL_REDIS_PW_4410";
 const API_KEY = "REAL_API_KEY_sk_live_99";
+const CLIENT_SECRET = "REAL_OAUTH_CLIENT_SECRET_42";
 
 let backendDb: Awaited<ReturnType<typeof startMemoryMongo>>;
 let upstreamMongo: MongoMemoryServer;
@@ -39,7 +40,7 @@ beforeAll(async () => {
     startMemoryMongo(),
     MongoMemoryServer.create({ auth: { enable: true, customRootName: "root", customRootPwd: MONGO_PW } }),
     startRedis(REDIS_PW),
-    startMockProvider(API_KEY),
+    startMockProvider(API_KEY, CLIENT_SECRET),
   ]);
   setEnv(loadEnv({ ...testEnvVars(backendDb.uri), UPSTREAM_EXTRA_CA_FILE: provider.caFile }));
   resetUpstreamDispatcher();
@@ -281,6 +282,75 @@ describe("tunnels through real services (T4, FR-GW-001, FR-GW-002)", () => {
         );
       });
     expect(await attempt("cbd_nope", resources.cache)).toBe(4401);
+  });
+});
+
+describe("oauth client secret (§10.8 oauth)", () => {
+  it("swaps the device's fake client secret on the token endpoint only", async () => {
+    const app = server.listeners("request")[0] as never;
+    const { owner, orgId } = await signupOwner(app);
+    const project = await owner.post(`/api/orgs/${orgId}/projects`, { name: "Auth" });
+    const envId = project.body.data.environments[0].id as string;
+    const res = await owner.post(`/api/environments/${envId}/resources`, {
+      kind: "oauth",
+      name: "google",
+      tokenUrl: "https://oauth.example.test/token",
+      upstreamUrl: provider.url,
+      clientSecret: CLIENT_SECRET,
+    });
+    expect(res.body.data.config.redirectHosts).toEqual(["oauth.example.test:443"]);
+    await owner.post(`/api/environments/${envId}/variables`, {
+      type: "brokered",
+      key: "GOOGLE_CLIENT_SECRET",
+      resourceId: res.body.data.id,
+      field: "clientSecret",
+    });
+    const { token } = await loginDevice(app, owner);
+    const boot = await cli(app, token).get(
+      `/api/agent/bootstrap?projectId=${project.body.data.id}&env=development`,
+    );
+    const fake = boot.body.data.plain.GOOGLE_CLIENT_SECRET as string;
+    expect(fake).toMatch(/^cb-[A-Za-z0-9]{40}$/);
+    expect(JSON.stringify(boot.body)).not.toContain(CLIENT_SECRET);
+
+    const url = new URL("/tunnel", base);
+    url.protocol = "ws:";
+    url.search = new URLSearchParams({
+      layer: "2",
+      env: envId,
+      host: "oauth.example.test",
+      port: "443",
+    }).toString();
+    const exchange = async (secret: string) => {
+      const ws = new WebSocket(url, { headers: { authorization: `Bearer ${token}` } });
+      await new Promise((r) => ws.once("open", r));
+      const secure = tls.connect({
+        socket: createWebSocketStream(ws),
+        servername: "oauth.example.test",
+        ca: boot.body.data.orgCaCert,
+        ALPNProtocols: ["http/1.1"],
+      });
+      await new Promise((r, j) => {
+        secure.once("secureConnect", r);
+        secure.once("error", j);
+      });
+      const body = `grant_type=authorization_code&code=x&client_id=web&client_secret=${encodeURIComponent(secret)}`;
+      secure.write(
+        `POST /token HTTP/1.1\r\nHost: oauth.example.test\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n${body}`,
+      );
+      return new Promise<string>((resolve) => {
+        let out = "";
+        secure.on("data", (d) => {
+          out += d.toString();
+        });
+        secure.on("end", () => resolve(out));
+      });
+    };
+    const ok = await exchange(fake);
+    expect(ok).toMatch(/^HTTP\/1\.1 200/);
+    expect(ok).toContain("secret was [cb-redacted]");
+    expect(ok).not.toContain(CLIENT_SECRET);
+    expect(await exchange("cb-forged")).toMatch(/^HTTP\/1\.1 401/);
   });
 });
 

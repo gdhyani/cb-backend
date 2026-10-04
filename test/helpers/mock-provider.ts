@@ -11,7 +11,7 @@ export interface ProviderRequest {
 }
 
 /** HTTPS "provider" on a private CA that only accepts the real key. Echoes the secret back to test redaction. */
-export async function startMockProvider(realKey: string) {
+export async function startMockProvider(realKey: string, clientSecret = "unused-client-secret") {
   const ca = await createCa("cb test provider CA");
   const leaf = await mintLeaf(ca, "localhost");
   const caFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cb-ca-")), "ca.pem");
@@ -19,6 +19,22 @@ export async function startMockProvider(realKey: string) {
   const requests: ProviderRequest[] = [];
   const server = https.createServer({ cert: leaf.certPem, key: leaf.keyPem }, (req, res) => {
     requests.push({ path: req.url ?? "", authorization: req.headers.authorization });
+    if (req.method === "POST" && req.url === "/token") {
+      let body = "";
+      req.on("data", (c) => {
+        body += c;
+      });
+      req.on("end", () => {
+        const ok = new URLSearchParams(body).get("client_secret") === clientSecret;
+        res.writeHead(ok ? 200 : 401, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify(
+            ok ? { access_token: "at_1", echo: `secret was ${clientSecret}` } : { error: "invalid_client" },
+          ),
+        );
+      });
+      return;
+    }
     const ok = req.headers.authorization === `Bearer ${realKey}`;
     res.writeHead(ok ? 200 : 401, { "content-type": "application/json" });
     res.end(JSON.stringify(ok ? { ok: true, path: req.url, echo: `token was ${realKey}` } : { ok: false }));

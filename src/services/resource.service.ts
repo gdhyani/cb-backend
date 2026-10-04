@@ -24,6 +24,7 @@ export const BROKERED_FIELDS: Record<ResourceKind, readonly string[]> = {
   mysql: ["url"],
   smtp: ["url", "host", "port", "user", "password"],
   http: ["key", "baseUrl"],
+  oauth: ["clientSecret"],
 };
 
 const HostPort = z.string().regex(/^[a-z0-9.-]+:\d{1,5}$/i, "use host:port, e.g. api.stripe.com:443");
@@ -47,6 +48,14 @@ export const CreateResourceBody = z.discriminatedUnion("kind", [
       .regex(/^(\/[^\s]*)?$/, "must start with /")
       .default(""),
     redirectHosts: z.array(HostPort).max(10).default([]),
+  }),
+  z.object({
+    kind: z.literal("oauth"),
+    name: Name,
+    tokenUrl: z.url().refine((u) => u.startsWith("https://"), "must be an https:// URL"),
+    clientSecret: z.string().min(1),
+    upstreamUrl: z.url().optional(),
+    redirectHosts: z.array(HostPort).max(10).optional(),
   }),
 ]);
 
@@ -108,6 +117,20 @@ function configAndSecret(
   input: Record<string, unknown>,
   current: Record<string, unknown> = {},
 ) {
+  if (kind === "oauth") {
+    const tokenUrl = (input.tokenUrl as string | undefined) ?? (current.tokenUrl as string | undefined) ?? "";
+    const hosts =
+      (input.redirectHosts as string[] | undefined) ??
+      (current.redirectHosts as string[] | undefined) ??
+      (tokenUrl ? [`${new URL(tokenUrl).hostname}:443`] : []);
+    const config = {
+      ...current,
+      tokenUrl,
+      redirectHosts: hosts.map((h) => h.toLowerCase()),
+      ...(input.upstreamUrl ? { upstreamUrl: input.upstreamUrl } : {}),
+    };
+    return { config, secret: input.clientSecret as string | undefined };
+  }
   if (kind !== "http") {
     const uri = input.connectionUri as string | undefined;
     if (!uri) return { config: current, secret: undefined };

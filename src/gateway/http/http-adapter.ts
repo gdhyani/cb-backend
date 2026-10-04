@@ -13,9 +13,9 @@ import { createRedactor } from "./redaction.js";
 import { upstreamDispatcher } from "./upstream.js";
 
 export type AuthScheme = "bearer" | "x-api-key" | "basic-password";
-type GatewayRequest = http.IncomingMessage | http2.Http2ServerRequest;
-type GatewayResponse = http.ServerResponse | http2.Http2ServerResponse;
-type Handler = (req: GatewayRequest, res: GatewayResponse) => void;
+export type GatewayRequest = http.IncomingMessage | http2.Http2ServerRequest;
+export type GatewayResponse = http.ServerResponse | http2.Http2ServerResponse;
+export type Handler = (req: GatewayRequest, res: GatewayResponse) => void;
 
 export interface HttpResourceConfig {
   upstreamUrl: string;
@@ -25,7 +25,7 @@ export interface HttpResourceConfig {
   redirectHosts?: string[];
 }
 
-const HOP_BY_HOP = new Set([
+export const HOP_BY_HOP = new Set([
   "connection",
   "keep-alive",
   "proxy-authenticate",
@@ -68,7 +68,7 @@ export function injectCredential(
   return out;
 }
 
-function sendJson(res: GatewayResponse, status: number, body: unknown): void {
+export function sendJson(res: GatewayResponse, status: number, body: unknown): void {
   if (res.headersSent) {
     res.destroy();
     return;
