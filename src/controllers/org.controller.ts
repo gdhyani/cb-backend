@@ -106,7 +106,8 @@ export async function listAuditHandler(req: Request, res: Response, next: NextFu
     await requireMembership(authOf(res).userId, orgId, "admin");
     const page = PaginationQuery.parse(req.query);
     const action = typeof req.query.action === "string" ? req.query.action : undefined;
-    const result = await auditService.listAudit(orgId, { ...page, action });
+    const category = auditService.AUDIT_CATEGORIES.find((c) => c === req.query.category);
+    const result = await auditService.listAudit(orgId, { ...page, action, category });
     sendPaginated(res, result.items, result.pagination);
   } catch (err) {
     next(toAppError(err, "org.controller.listAudit: failed to list audit events"));
