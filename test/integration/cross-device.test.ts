@@ -1,6 +1,6 @@
 import type http from "node:http";
 import { request as httpRequest } from "node:http";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import { Redis } from "ioredis";
 import { MongoClient } from "mongodb";
 import { MongoMemoryServer } from "mongodb-memory-server";
@@ -191,6 +191,43 @@ describe("S7 a fake value from device A fails through device B's tunnel", () => 
     await expect(mysql.createConnection(fakeOf(boot, "mysql", l.port))).rejects.toMatchObject({
       errno: 1045,
     });
+    l.close();
+  });
+});
+
+describe("FR-GW-001 hostile local input: malformed bytes close one tunnel, never the gateway", () => {
+  const garbage = [
+    Buffer.alloc(16),
+    Buffer.from([0xff, 0xff, 0xff, 0x7f, 0, 0, 0, 0, 0, 0, 0, 0, 0xd5, 0x07, 0, 0]),
+    Buffer.from("\x00\x00\x00\x08\x04\xd2\x16\x2f garbage \r\n*-1\r\n$-5\r\n"),
+    Buffer.from(Array.from({ length: 64 }, (_, i) => (i * 37) % 256)),
+  ];
+  const kinds = ["db", "cache", "pg", "mysql"] as const;
+  it.each(kinds)("FR-GW-001 %s adapter survives malformed client bytes", async (kind) => {
+    if ((kind === "pg" || kind === "mysql") && !SQL_PW) return;
+    const { tokenB, envId, resources } = await twoDevices();
+    // An authorized tunnel: the bytes reach the adapter before any protocol-level authentication.
+    // A throw in an adapter's stream handler would be an uncaught exception (vitest fails the run on it).
+    const l = await localListener(base, tokenB, { layer: "1", env: envId, resource: resources[kind] ?? "" });
+    for (const bytes of garbage) {
+      await new Promise<void>((resolve) => {
+        const s = net.connect(l.port, "127.0.0.1", () => s.end(bytes));
+        s.on("error", () => resolve());
+        s.on("close", () => resolve());
+        s.resume();
+        setTimeout(() => {
+          s.destroy();
+          resolve();
+        }, 1500);
+      });
+    }
+    await new Promise((r) => setTimeout(r, 300));
+    expect(server.listening).toBe(true);
+    const health = await fetch(`${base}/api/health`).then(
+      (r) => r.status,
+      () => 0,
+    );
+    expect(health).toBe(200);
     l.close();
   });
 });
