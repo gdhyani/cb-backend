@@ -12,7 +12,8 @@
     "start": "node --env-file-if-exists=.env dist/index.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check ."
+    "lint": "biome check .",
+    "migrate:unified-variables": "node --env-file-if-exists=.env --import tsx scripts/migrate-unified-variables.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.2.1",
