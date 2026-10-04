@@ -24,6 +24,8 @@ export const CreateVariableBody = z.discriminatedUnion("type", [
     type: z.literal("plain"),
     key: Key,
     value: z.string().max(10_000),
+    /** D8: an extra key shown with (and removed with) the service it belongs to. */
+    resourceId: z.string().optional(),
     required: z.boolean().default(false),
   }),
   z.object({ type: z.literal("generated"), key: Key, format: Format, required: z.boolean().default(false) }),
@@ -145,7 +147,17 @@ export async function createVariable(
     type: input.type,
     required: input.required,
   };
-  if (input.type === "plain") doc.value = input.value;
+  if (input.type === "plain") {
+    doc.value = input.value;
+    if (input.resourceId) {
+      const linked = await ResourceModel.exists({ _id: input.resourceId, environmentId: envId });
+      if (!linked)
+        throw new AppError("VALIDATION_FAILED", {
+          details: [{ path: "resourceId", message: "Pick a service from this environment." }],
+        });
+      doc.resourceId = input.resourceId;
+    }
+  }
   if (input.type === "generated") doc.format = input.format;
   if (input.type === "visible") doc.secret = encryptSecret(masterKey(), input.value);
   if (input.type === "brokered") {

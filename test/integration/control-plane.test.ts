@@ -724,3 +724,41 @@ describe("D9 replace value is tested before it is stored (J2)", () => {
     expect(still.body.data.ok).toBe(true);
   });
 });
+
+describe("D8 extra keys link to their service", () => {
+  it("a plain variable can link to a resource, renders as plain, and is removed with it", async () => {
+    const ctx = await signupOwner(app);
+    const project = await ctx.owner.post(`/api/orgs/${ctx.orgId}/projects`, { name: "P" });
+    const envId = project.body.data.environments[0].id as string;
+    const stripe = await ctx.owner.post(`/api/environments/${envId}/resources`, {
+      kind: "http",
+      name: "stripe",
+      upstreamUrl: "https://api.stripe.com",
+      apiKey: "sk_live_x",
+    });
+    const pk = await ctx.owner.post(`/api/environments/${envId}/variables`, {
+      type: "plain",
+      key: "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
+      value: "pk_live_1",
+      resourceId: stripe.body.data.id,
+    });
+    expect(pk.status).toBe(201);
+    expect(pk.body.data).toMatchObject({
+      type: "plain",
+      value: "pk_live_1",
+      resourceId: stripe.body.data.id,
+    });
+    const other = await ctx.owner.post(`/api/orgs/${ctx.orgId}/projects`, { name: "Q" });
+    const foreignEnv = other.body.data.environments[0].id as string;
+    const foreign = await ctx.owner.post(`/api/environments/${foreignEnv}/variables`, {
+      type: "plain",
+      key: "X",
+      value: "1",
+      resourceId: stripe.body.data.id,
+    });
+    expect(foreign.status).toBe(400);
+    await ctx.owner.delete(`/api/resources/${stripe.body.data.id}`);
+    const left = await ctx.owner.get(`/api/environments/${envId}/variables`);
+    expect(left.body.data).toEqual([]);
+  });
+});
