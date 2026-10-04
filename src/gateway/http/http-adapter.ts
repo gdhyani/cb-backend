@@ -12,7 +12,7 @@ import type { StreamAdapter, TunnelContext } from "../types.js";
 import { createRedactor } from "./redaction.js";
 import { upstreamDispatcher } from "./upstream.js";
 
-export type AuthScheme = "bearer" | "x-api-key" | "basic-password";
+export type AuthScheme = "bearer" | "x-api-key" | "basic-password" | "header";
 export type GatewayRequest = http.IncomingMessage | http2.Http2ServerRequest;
 export type GatewayResponse = http.ServerResponse | http2.Http2ServerResponse;
 export type Handler = (req: GatewayRequest, res: GatewayResponse) => void;
@@ -20,6 +20,8 @@ export type Handler = (req: GatewayRequest, res: GatewayResponse) => void;
 export interface HttpResourceConfig {
   upstreamUrl: string;
   authScheme?: AuthScheme;
+  /** D12: header that carries the key when authScheme is "header" (lowercase). */
+  authHeader?: string;
   fakePrefix?: string;
   basePath?: string;
   redirectHosts?: string[];
@@ -49,7 +51,12 @@ function decodeBasic(header: string | undefined): [string, string] | undefined {
   return i < 0 ? undefined : [decoded.slice(0, i), decoded.slice(i + 1)];
 }
 
-export function extractCredential(scheme: AuthScheme, headers: IncomingHttpHeaders): string | undefined {
+export function extractCredential(
+  scheme: AuthScheme,
+  headers: IncomingHttpHeaders,
+  authHeader?: string,
+): string | undefined {
+  if (scheme === "header") return authHeader ? first(headers[authHeader]) : undefined;
   if (scheme === "x-api-key") return first(headers["x-api-key"]);
   if (scheme === "bearer") return /^Bearer\s+(.+)$/i.exec(first(headers.authorization) ?? "")?.[1];
   return decodeBasic(first(headers.authorization))?.[1];
@@ -59,9 +66,11 @@ export function injectCredential(
   scheme: AuthScheme,
   headers: Record<string, string>,
   real: string,
+  authHeader?: string,
 ): Record<string, string> {
   const out = { ...headers };
-  if (scheme === "x-api-key") out["x-api-key"] = real;
+  if (scheme === "header" && authHeader) out[authHeader] = real;
+  else if (scheme === "x-api-key") out["x-api-key"] = real;
   else if (scheme === "bearer") out.authorization = `Bearer ${real}`;
   else
     out.authorization = `Basic ${Buffer.from(`${decodeBasic(out.authorization)?.[0] ?? ""}:${real}`).toString("base64")}`;
@@ -94,7 +103,7 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
   const prefix = upstream.pathname.replace(/\/$/, "");
 
   return (req, res) => {
-    const presented = extractCredential(scheme, req.headers);
+    const presented = extractCredential(scheme, req.headers, config.authHeader);
     if (!presented || !safeEqual(presented, expected)) {
       req.resume();
       sendJson(res, 401, { error: "cb_invalid_credential" });
@@ -107,7 +116,10 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
       if (!k.startsWith(":") && !HOP_BY_HOP.has(k) && v !== undefined)
         headers[k] = Array.isArray(v) ? v.join(", ") : v;
     }
-    const outHeaders = { ...injectCredential(scheme, headers, ctx.secret), host: upstream.host };
+    const outHeaders = {
+      ...injectCredential(scheme, headers, ctx.secret, config.authHeader),
+      host: upstream.host,
+    };
     const method = req.method ?? "GET";
     request(target, {
       method: method as "GET",

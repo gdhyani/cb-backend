@@ -12,7 +12,7 @@ import { request } from "undici";
 import { getEnv } from "../config/env.js";
 import { signJwt } from "../crypto/jwt.js";
 import { AppError } from "../errors/app-error.js";
-import { injectCredential } from "../gateway/http/http-adapter.js";
+import { type AuthScheme, injectCredential } from "../gateway/http/http-adapter.js";
 import { upstreamCa, upstreamDispatcher } from "../gateway/http/upstream.js";
 import { type ResourceKind, ResourceModel } from "../models/resource.model.js";
 import { MYSQL_TLS_HINT, parseMongoUri } from "../utils/connection-uri.js";
@@ -147,9 +147,10 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
   async http(secret, config) {
     const base = `${String(config.upstreamUrl ?? "").replace(/\/$/, "")}${String(config.basePath ?? "")}`;
     const headers = injectCredential(
-      (config.authScheme as "bearer" | "x-api-key" | "basic-password") ?? "bearer",
+      (config.authScheme as AuthScheme | undefined) ?? "bearer",
       { "user-agent": "cb-connection-test" },
       secret,
+      config.authHeader as string | undefined,
     );
     const res = await request(base || "/", { method: "GET", headers, dispatcher: upstreamDispatcher() });
     await res.body.dump();

@@ -71,85 +71,98 @@ const ServiceAccountJson = z.string().refine((raw) => {
 
 const HostPort = z.string().regex(/^[a-z0-9.-]+:\d{1,5}$/i, "use host:port, e.g. api.stripe.com:443");
 const Name = z.string().trim().min(1).max(60);
+const AuthSchemeEnum = z.enum(["bearer", "x-api-key", "basic-password", "header"]);
+const AuthHeader = z
+  .string()
+  .regex(/^[a-z0-9][a-z0-9-]{0,63}$/, "a lowercase header name, e.g. x-goog-api-key");
+/** UI hint only (which preset or dashboard type made this service); never read by the gateway. */
+const Provider = z.string().regex(/^[a-z0-9-]{1,40}$/);
 
-export const CreateResourceBody = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("mongodb"),
-    name: Name,
-    connectionUri: z.string().min(10),
-    caCert: PemCertificates.optional(),
-  }),
-  z.object({
-    kind: z.literal("redis"),
-    name: Name,
-    connectionUri: z.string().min(8),
-    caCert: PemCertificates.optional(),
-  }),
-  z.object({
-    kind: z.literal("postgres"),
-    name: Name,
-    connectionUri: z.string().min(10),
-    caCert: PemCertificates.optional(),
-  }),
-  z.object({
-    kind: z.literal("mysql"),
-    name: Name,
-    connectionUri: z.string().min(8),
-    caCert: PemCertificates.optional(),
-  }),
-  z.object({
-    kind: z.literal("smtp"),
-    name: Name,
-    connectionUri: z.string().min(8),
-    caCert: PemCertificates.optional(),
-  }),
-  z.object({
-    kind: z.literal("http"),
-    name: Name,
-    upstreamUrl: UpstreamUrl,
-    authScheme: z.enum(["bearer", "x-api-key", "basic-password"]).default("bearer"),
-    apiKey: z.string().min(1),
-    fakePrefix: z.string().max(20).default("cb_"),
-    basePath: z
-      .string()
-      .regex(/^(\/[^\s]*)?$/, "must start with /")
-      .default(""),
-    redirectHosts: z.array(HostPort).max(10).default([]),
-  }),
-  z.object({
-    kind: z.literal("aws"),
-    name: Name,
-    region: z.string().regex(/^[a-z0-9-]+$/, "e.g. eu-west-1, or auto for R2"),
-    // https for real endpoints; plain http only for private addresses (D11).
-    endpoint: UpstreamUrl,
-    accessKeyId: z.string().min(3),
-    secretAccessKey: z.string().min(8),
-  }),
-  z.object({
-    kind: z.literal("google-sa"),
-    name: Name,
-    serviceAccountJson: ServiceAccountJson,
-    upstreamUrl: HttpsUrl.optional(),
-    redirectHosts: z.array(HostPort).max(10).optional(),
-  }),
-  z.object({
-    kind: z.literal("apns"),
-    name: Name,
-    keyId: z.string().regex(/^[A-Z0-9]{10}$/, "10-character key ID from Apple"),
-    teamId: z.string().regex(/^[A-Z0-9]{10}$/, "10-character team ID from Apple"),
-    privateKey: PemPrivateKey,
-    upstreamUrl: HttpsUrl.optional(),
-    redirectHosts: z.array(HostPort).max(10).optional(),
-  }),
-  z.object({
-    kind: z.literal("oauth"),
-    name: Name,
-    tokenUrl: HttpsOnlyUrl,
-    clientSecret: z.string().min(1),
-    upstreamUrl: UpstreamUrl.optional(),
-    redirectHosts: z.array(HostPort).max(10).optional(),
-  }),
-]);
+export const CreateResourceBody = z
+  .discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("mongodb"),
+      name: Name,
+      connectionUri: z.string().min(10),
+      caCert: PemCertificates.optional(),
+    }),
+    z.object({
+      kind: z.literal("redis"),
+      name: Name,
+      connectionUri: z.string().min(8),
+      caCert: PemCertificates.optional(),
+    }),
+    z.object({
+      kind: z.literal("postgres"),
+      name: Name,
+      connectionUri: z.string().min(10),
+      caCert: PemCertificates.optional(),
+    }),
+    z.object({
+      kind: z.literal("mysql"),
+      name: Name,
+      connectionUri: z.string().min(8),
+      caCert: PemCertificates.optional(),
+    }),
+    z.object({
+      kind: z.literal("smtp"),
+      name: Name,
+      connectionUri: z.string().min(8),
+      caCert: PemCertificates.optional(),
+    }),
+    z.object({
+      kind: z.literal("http"),
+      name: Name,
+      upstreamUrl: UpstreamUrl,
+      authScheme: AuthSchemeEnum.default("bearer"),
+      authHeader: AuthHeader.optional(),
+      provider: Provider.optional(),
+      apiKey: z.string().min(1),
+      fakePrefix: z.string().max(20).default("cb_"),
+      basePath: z
+        .string()
+        .regex(/^(\/[^\s]*)?$/, "must start with /")
+        .default(""),
+      redirectHosts: z.array(HostPort).max(10).default([]),
+    }),
+    z.object({
+      kind: z.literal("aws"),
+      name: Name,
+      region: z.string().regex(/^[a-z0-9-]+$/, "e.g. eu-west-1, or auto for R2"),
+      // https for real endpoints; plain http only for private addresses (D11).
+      endpoint: UpstreamUrl,
+      accessKeyId: z.string().min(3),
+      secretAccessKey: z.string().min(8),
+    }),
+    z.object({
+      kind: z.literal("google-sa"),
+      name: Name,
+      serviceAccountJson: ServiceAccountJson,
+      upstreamUrl: HttpsUrl.optional(),
+      redirectHosts: z.array(HostPort).max(10).optional(),
+    }),
+    z.object({
+      kind: z.literal("apns"),
+      name: Name,
+      keyId: z.string().regex(/^[A-Z0-9]{10}$/, "10-character key ID from Apple"),
+      teamId: z.string().regex(/^[A-Z0-9]{10}$/, "10-character team ID from Apple"),
+      privateKey: PemPrivateKey,
+      upstreamUrl: HttpsUrl.optional(),
+      redirectHosts: z.array(HostPort).max(10).optional(),
+    }),
+    z.object({
+      kind: z.literal("oauth"),
+      name: Name,
+      tokenUrl: HttpsOnlyUrl,
+      clientSecret: z.string().min(1),
+      upstreamUrl: UpstreamUrl.optional(),
+      redirectHosts: z.array(HostPort).max(10).optional(),
+    }),
+  ])
+  .superRefine((b, ctx) => {
+    if (b.kind === "http" && b.authScheme === "header" && !b.authHeader)
+      ctx.addIssue({ code: "custom", path: ["authHeader"], message: "required with the named-header style" });
+  });
 
 export const UpdateResourceBody = z.object({
   serviceAccountJson: ServiceAccountJson.optional(),
@@ -177,7 +190,8 @@ export const UpdateResourceBody = z.object({
   caCert: PemCertificates.or(z.literal("")).optional(),
   apiKey: z.string().min(1).optional(),
   upstreamUrl: UpstreamUrl.optional(),
-  authScheme: z.enum(["bearer", "x-api-key", "basic-password"]).optional(),
+  authScheme: AuthSchemeEnum.optional(),
+  authHeader: AuthHeader.optional(),
   fakePrefix: z.string().max(20).optional(),
   basePath: z.string().optional(),
   redirectHosts: z.array(HostPort).max(10).optional(),
@@ -339,7 +353,15 @@ export function configAndSecret(
     return { config: withCa(config), secret: uri };
   }
   const config = { ...current };
-  for (const key of ["upstreamUrl", "authScheme", "fakePrefix", "basePath", "redirectHosts"]) {
+  for (const key of [
+    "upstreamUrl",
+    "authScheme",
+    "authHeader",
+    "provider",
+    "fakePrefix",
+    "basePath",
+    "redirectHosts",
+  ]) {
     if (input[key] !== undefined)
       config[key] =
         key === "redirectHosts" ? (input[key] as string[]).map((h) => h.toLowerCase()) : input[key];

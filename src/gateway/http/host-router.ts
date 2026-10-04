@@ -38,7 +38,10 @@ function matchByHeaders(req: GatewayRequest, resources: RoutedResource[]): Route
   // API-key resources: the fake key carries the resource's configured prefix.
   for (const r of resources.filter((x) => x.ctx.resource.kind === "http")) {
     const prefix = String(r.ctx.resource.config.fakePrefix ?? "cb_");
-    if (keys.some((k) => k.startsWith(prefix) && !k.startsWith(OAUTH_FAKE_PREFIX))) return r;
+    // D12: named-header keys arrive in the resource's own header.
+    const header = r.ctx.resource.config.authHeader;
+    const own = typeof header === "string" ? first(req.headers[header]) : "";
+    if ([...keys, own].some((k) => k.startsWith(prefix) && !k.startsWith(OAUTH_FAKE_PREFIX))) return r;
   }
   return undefined;
 }
