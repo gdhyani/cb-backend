@@ -23,7 +23,6 @@ import { loadEnvironment, requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { touchEnvironment } from "./environment.service.js";
 import { readResourceSecret } from "./resource-secret.service.js";
-import { runDraftTest } from "./resource-test.service.js";
 
 /** Which variable fields each resource kind can broker. */
 export const BROKERED_FIELDS: Record<ResourceKind, readonly string[]> = {
@@ -449,6 +448,8 @@ export async function updateResource(
   const { config, secret } = configAndSecret(kind, input, resource.config as Record<string, unknown>);
   if (input.test) {
     const candidate = secret ?? (await readResourceSecret(resourceId));
+    // Loaded lazily: resource-test → profile → resource would otherwise be a load-order-dependent cycle.
+    const { runDraftTest } = await import("./resource-test.service.js");
     const result = await runDraftTest(kind, candidate, config);
     if (!result.ok) throw new AppError("SERVICE_TEST_FAILED", { message: result.message });
   }

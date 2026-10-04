@@ -7,6 +7,8 @@ const PresetSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/),
   name: z.string(),
   category: z.enum(["AI", "Payments", "Auth", "Push", "Storage", "Email", "Database"]),
+  /** D6: providers listed inside one dashboard type (AI API key, sign-in). */
+  group: z.enum(["ai", "oauth"]).optional(),
   kind: z.enum(RESOURCE_KINDS),
   description: z.string(),
   /** Non-secret create fields (upstream URL, auth scheme, redirect hosts, region…). */

@@ -1,6 +1,6 @@
 # cb API contract. Owned by cb-backend; consumers run `npm run sync:contract`.
 openapi: 3.1.0
-x-contract-version: 1.1.0
+x-contract-version: 1.2.0
 info:
   title: cb API
   version: 1.0.0
@@ -2986,6 +2986,10 @@ components:
         category:
           type: string
           enum: [AI, Payments, Auth, Push, Storage, Email, Database]
+        group:
+          type: string
+          enum: [ai, oauth]
+          description: Providers listed inside one dashboard type (AI API key, sign-in) (D6).
         kind:
           type: string
           enum: [mongodb, redis, postgres, mysql, smtp, http, oauth, aws, google-sa, apns]
@@ -3065,6 +3069,8 @@ components:
         - bearer
         - x-api-key
         - basic-password
+        - header
+      description: header = the key travels in the header named by authHeader (D12).
     EnvName:
       type: string
       pattern: ^[a-z][a-z0-9-]{0,30}$
@@ -4392,11 +4398,19 @@ components:
         upstreamUrl:
           type: string
           format: uri
-          pattern: ^https://
-          description: Must be an https:// URL.
+          pattern: ^https?://
+          description: https://, or http:// only for private addresses (10/8, 172.16/12, 192.168/16, 127/8, ::1, fc00::/7, localhost) (D11).
         authScheme:
           $ref: "#/components/schemas/AuthScheme"
           default: bearer
+        authHeader:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9-]{0,63}$
+          description: Required when authScheme is header (D12).
+        provider:
+          type: string
+          pattern: ^[a-z0-9-]{1,40}$
+          description: UI hint (preset or dashboard type that made the service); never used by the gateway.
         apiKey:
           type: string
           minLength: 1
@@ -4444,7 +4458,7 @@ components:
         endpoint:
           type: string
           format: uri
-          description: https://, or http:// only for 127.0.0.1/localhost.
+          description: https://, or http:// only for private addresses (10/8, 172.16/12, 192.168/16, 127/8, ::1, fc00::/7, localhost) (D11).
         accessKeyId:
           type: string
           minLength: 3
@@ -4562,6 +4576,7 @@ components:
         upstreamUrl:
           type: string
           format: uri
+          description: https://, or http:// only for private addresses (D11).
         redirectHosts:
           type: array
           items:
@@ -4611,6 +4626,10 @@ components:
           description: Trimmed.
         disabled:
           type: boolean
+          description: true closes every live tunnel to this service (J7).
+        test:
+          type: boolean
+          description: Test the merged credential/config before storing; 422 SERVICE_TEST_FAILED on failure (D9).
         connectionUri:
           type: string
           minLength: 8
@@ -4662,14 +4681,20 @@ components:
         endpoint:
           type: string
           format: uri
+          description: https://, or http:// only for private addresses (10/8, 172.16/12, 192.168/16, 127/8, ::1, fc00::/7, localhost) (D11).
         tokenUrl:
           type: string
           format: uri
+          pattern: ^https://
         upstreamUrl:
           type: string
           format: uri
+          description: https://, or http:// only for private addresses (10/8, 172.16/12, 192.168/16, 127/8, ::1, fc00::/7, localhost) (D11).
         authScheme:
           $ref: "#/components/schemas/AuthScheme"
+        authHeader:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9-]{0,63}$
         fakePrefix:
           type: string
           maxLength: 20
@@ -4765,6 +4790,9 @@ components:
         value:
           type: string
           maxLength: 10000
+        resourceId:
+          type: string
+          description: D8 link to a service in the same environment; removed with it.
         required:
           type: boolean
           default: false

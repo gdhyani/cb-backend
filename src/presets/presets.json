@@ -3,6 +3,7 @@
     "id": "openai",
     "name": "OpenAI",
     "category": "AI",
+    "group": "ai",
     "kind": "http",
     "description": "OpenAI SDKs read OPENAI_BASE_URL, so traffic goes through a local listener.",
     "defaults": {
@@ -22,6 +23,7 @@
     "id": "anthropic",
     "name": "Anthropic",
     "category": "AI",
+    "group": "ai",
     "kind": "http",
     "description": "Anthropic SDKs send the key in x-api-key and read ANTHROPIC_BASE_URL.",
     "defaults": {
@@ -36,6 +38,75 @@
       { "key": "ANTHROPIC_API_KEY", "field": "key" },
       { "key": "ANTHROPIC_BASE_URL", "field": "baseUrl" }
     ]
+  },
+  {
+    "id": "gemini",
+    "name": "Google Gemini",
+    "category": "AI",
+    "group": "ai",
+    "kind": "http",
+    "description": "Gemini SDKs send the key in x-goog-api-key; generativelanguage.googleapis.com is redirected.",
+    "defaults": {
+      "upstreamUrl": "https://generativelanguage.googleapis.com",
+      "authScheme": "header",
+      "authHeader": "x-goog-api-key",
+      "fakePrefix": "AIzaCb",
+      "basePath": "",
+      "redirectHosts": ["generativelanguage.googleapis.com:443"]
+    },
+    "secretPlaceholder": "AIza…",
+    "variables": [{ "key": "GEMINI_API_KEY", "field": "key" }]
+  },
+  {
+    "id": "groq",
+    "name": "Groq",
+    "category": "AI",
+    "group": "ai",
+    "kind": "http",
+    "description": "OpenAI-compatible; api.groq.com is redirected.",
+    "defaults": {
+      "upstreamUrl": "https://api.groq.com",
+      "authScheme": "bearer",
+      "fakePrefix": "gsk_cb_",
+      "basePath": "/openai/v1",
+      "redirectHosts": ["api.groq.com:443"]
+    },
+    "secretPlaceholder": "gsk_…",
+    "variables": [{ "key": "GROQ_API_KEY", "field": "key" }]
+  },
+  {
+    "id": "mistral",
+    "name": "Mistral",
+    "category": "AI",
+    "group": "ai",
+    "kind": "http",
+    "description": "api.mistral.ai is redirected.",
+    "defaults": {
+      "upstreamUrl": "https://api.mistral.ai",
+      "authScheme": "bearer",
+      "fakePrefix": "mistral_cb_",
+      "basePath": "/v1",
+      "redirectHosts": ["api.mistral.ai:443"]
+    },
+    "secretPlaceholder": "the API key",
+    "variables": [{ "key": "MISTRAL_API_KEY", "field": "key" }]
+  },
+  {
+    "id": "openrouter",
+    "name": "OpenRouter",
+    "category": "AI",
+    "group": "ai",
+    "kind": "http",
+    "description": "OpenAI-compatible; openrouter.ai is redirected.",
+    "defaults": {
+      "upstreamUrl": "https://openrouter.ai",
+      "authScheme": "bearer",
+      "fakePrefix": "sk-or-cb-",
+      "basePath": "/api/v1",
+      "redirectHosts": ["openrouter.ai:443"]
+    },
+    "secretPlaceholder": "sk-or-…",
+    "variables": [{ "key": "OPENROUTER_API_KEY", "field": "key" }]
   },
   {
     "id": "stripe",
@@ -74,6 +145,7 @@
     "id": "google-oauth",
     "name": "Google sign-in",
     "category": "Auth",
+    "group": "oauth",
     "kind": "oauth",
     "description": "The client secret is swapped at Google's token endpoint; the client id stays plain.",
     "defaults": { "tokenUrl": "https://oauth2.googleapis.com/token" },
@@ -85,6 +157,7 @@
     "id": "github-oauth",
     "name": "GitHub sign-in",
     "category": "Auth",
+    "group": "oauth",
     "kind": "oauth",
     "description": "The client secret is swapped at GitHub's token endpoint.",
     "defaults": { "tokenUrl": "https://github.com/login/oauth/access_token" },
