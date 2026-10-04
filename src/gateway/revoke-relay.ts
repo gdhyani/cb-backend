@@ -1,4 +1,4 @@
-import type { Duplex } from "node:stream";
+import type { Duplex, Readable } from "node:stream";
 import type { AdapterHooks } from "./types.js";
 
 export const REVOKED_TEXT = "cb: access revoked by admin";
@@ -86,8 +86,10 @@ export function relayWithRevocation(
   framer: Framer,
   hooks: AdapterHooks,
   errorFrame: () => Buffer | undefined,
+  /** App→upstream bytes; defaults to the client itself (MongoDB passes its post-authentication stream). */
+  source: Readable = client,
 ): void {
-  client.pipe(upstream);
+  source.pipe(upstream);
   let stopping: (() => void) | undefined;
   upstream.on("data", (chunk: Buffer) => {
     framer.feed(chunk);
@@ -101,8 +103,8 @@ export function relayWithRevocation(
 
   hooks.onRevoke = () =>
     new Promise<void>((resolve) => {
-      client.unpipe(upstream);
-      client.pause();
+      source.unpipe(upstream);
+      source.pause();
       const finish = () => {
         stopping = undefined;
         upstream.pause();

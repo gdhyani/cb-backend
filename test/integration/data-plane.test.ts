@@ -156,7 +156,9 @@ describe("agent bootstrap (FR-AGT-003, S1, S7)", () => {
     const byKind = Object.fromEntries(
       data.listeners.map((l: { kind: string; env: Record<string, string> }) => [l.kind, l.env]),
     );
-    expect(byKind.mongodb.MONGODB_URI).toBe("mongodb://127.0.0.1:{port}/shop?directConnection=true");
+    expect(byKind.mongodb.MONGODB_URI).toMatch(
+      /^mongodb:\/\/cbu_[a-z2-7]{8}:[A-Za-z0-9]{32}@127\.0\.0\.1:\{port\}\/shop\?directConnection=true&authSource=admin&authMechanism=SCRAM-SHA-256$/,
+    );
     expect(byKind.redis.REDIS_URL).toMatch(
       /^redis:\/\/cbu_[a-z2-7]{8}:[A-Za-z0-9]{32}@127\.0\.0\.1:\{port\}$/,
     );
@@ -189,6 +191,63 @@ describe("tunnels through real services (T4, FR-GW-001, FR-GW-002)", () => {
     const coll = client.db("shop").collection("orders");
     await coll.insertOne({ sku: "A1", qty: 2 });
     expect(await coll.findOne({ sku: "A1" })).toMatchObject({ qty: 2 });
+    await client.close();
+    listener.close();
+  });
+
+  it("S7 mongodb: no credentials or a wrong fake password is refused by the gateway", async () => {
+    const { token, envId, resources, boot } = await scenario();
+    const listener = await localListener(base, token, { layer: "1", env: envId, resource: resources.db });
+    const template: string = boot.body.data.listeners.find((l: { kind: string }) => l.kind === "mongodb").env
+      .MONGODB_URI;
+    const bare = new MongoClient(`mongodb://127.0.0.1:${listener.port}/shop?directConnection=true`, {
+      serverSelectionTimeoutMS: 3000,
+    });
+    await bare.connect();
+    await expect(bare.db("shop").collection("orders").findOne({})).rejects.toMatchObject({ code: 13 });
+    await bare.close();
+    const wrong = new MongoClient(
+      fill(template, listener.port).replace(/:([A-Za-z0-9]{32})@/, `:${"x".repeat(32)}@`),
+      { serverSelectionTimeoutMS: 3000 },
+    );
+    await expect(wrong.connect()).rejects.toMatchObject({ code: 18 });
+    await wrong.close();
+    listener.close();
+  });
+
+  it("FR-GW-002 mongodb monitoring connection keeps serving hello without authenticating", async () => {
+    const { token, envId, resources, boot } = await scenario();
+    const listener = await localListener(base, token, { layer: "1", env: envId, resource: resources.db });
+    const template: string = boot.body.data.listeners.find((l: { kind: string }) => l.kind === "mongodb").env
+      .MONGODB_URI;
+    const client = new MongoClient(fill(template, listener.port), {
+      heartbeatFrequencyMS: 500,
+      serverSelectionTimeoutMS: 5000,
+    });
+    const beats: string[] = [];
+    client.on("serverHeartbeatSucceeded", () => beats.push("ok"));
+    client.on("serverHeartbeatFailed", () => beats.push("fail"));
+    await client.connect();
+    await new Promise((r) => setTimeout(r, 2500));
+    expect(beats.filter((b) => b === "ok").length).toBeGreaterThanOrEqual(2);
+    expect(beats).not.toContain("fail");
+    await client.close();
+    listener.close();
+  });
+
+  it("FR-GW-002 mongodb speculative auth and compression in hello are stripped", async () => {
+    const { token, envId, resources, boot } = await scenario();
+    const listener = await localListener(base, token, { layer: "1", env: envId, resource: resources.db });
+    const template: string = boot.body.data.listeners.find((l: { kind: string }) => l.kind === "mongodb").env
+      .MONGODB_URI;
+    const client = new MongoClient(fill(template, listener.port), {
+      compressors: ["zlib"],
+      serverSelectionTimeoutMS: 5000,
+    });
+    await client.connect();
+    const coll = client.db("shop").collection("orders");
+    await coll.insertOne({ sku: "Z9", qty: 1 });
+    expect(await coll.findOne({ sku: "Z9" })).toMatchObject({ qty: 1 });
     await client.close();
     listener.close();
   });

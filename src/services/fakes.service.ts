@@ -114,3 +114,10 @@ export async function fakeGooglePublicKey(
   return (await FakeKeyModel.findOne({ deviceId: scope.deviceId, resourceId: scope.resourceId }).lean())
     ?.publicPem;
 }
+
+/** MongoDB SCRAM-SHA-256 fake: the db-style user/password plus a derived salt (the gateway is the SCRAM server). */
+export function fakeScramMaterial(scope: FakeScope) {
+  const { username, password } = fakeDbCredentials(scope);
+  const parts = ["fake", scope.deviceId, scope.environmentId, scope.resourceId, "scram-salt"];
+  return { username, password, salt: deriveBytes(secret(), parts, 16), iterations: 15000 };
+}
