@@ -6,8 +6,8 @@ services:
   redis-auth:
     image: redis:7
     ports: ["6380:6379"]
-    command: ["redis-server", "--requirepass", "${CB_TEST_REDIS_PASSWORD:-Real_Redis_Pw_2026}"]
+    command: ["redis-server", "--requirepass", "${CB_TEST_REDIS_PASSWORD:?set CB_TEST_REDIS_PASSWORD in your shell}"]
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${CB_TEST_REDIS_PASSWORD:-Real_Redis_Pw_2026}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${CB_TEST_REDIS_PASSWORD:?set CB_TEST_REDIS_PASSWORD in your shell}", "ping"]
       interval: 3s
       retries: 20
