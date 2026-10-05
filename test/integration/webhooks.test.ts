@@ -710,5 +710,25 @@ describe("webhooks method 1: central ingress → only the device that caused it 
       bob.close();
       cara.close();
     });
+
+    it("M8 two streams from one device: each webhook is pushed once (newest stream), and the older takes over when it closes", async () => {
+      const { envId, bob, cara, hooks } = await shop();
+      const older = openEvents(base, bob.token, envId);
+      await waitFor(() => older.of("ready").length);
+      const newer = openEvents(base, bob.token, envId);
+      await waitFor(() => newer.of("ready").length);
+      const pi = await bob.createPaymentIntent();
+      await waitFor(async () => (await WebhookOwnerModel.countDocuments()) >= 1 || undefined);
+      await postStripe(hooks.stripe, piEvent("evt_TwoStream01", pi.id));
+      await waitFor(() => newer.of("webhook")[0]);
+      await new Promise((r) => setTimeout(r, 200));
+      expect(older.of("webhook")).toHaveLength(0);
+      await newer.close();
+      await postStripe(hooks.stripe, piEvent("evt_TwoStream02", pi.id));
+      await waitFor(() => older.of("webhook").length === 2); // the first one (unacked) is re-sent too
+      await older.close();
+      bob.close();
+      cara.close();
+    });
   });
 });
