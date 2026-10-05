@@ -7,6 +7,12 @@ import { pendingFor, renderPush, streamOpened } from "./webhook-delivery.service
 
 const HEARTBEAT_MS = 15_000;
 const open = new Set<Response>();
+/**
+ * Streams per device + environment, oldest first. Only the newest pushes webhooks (a second terminal or a
+ * reconnect overlapping the old stream must not double every push); the previous one takes over if it closes.
+ */
+const webhookStreams = new Map<string, Response[]>();
+const isWebhookStream = (key: string, res: Response) => webhookStreams.get(key)?.at(-1) === res;
 
 function write(res: Response, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -40,6 +46,7 @@ export function streamAgentEvents(res: Response, subject: RuntimeSubject): void 
   });
   write(res, "ready", { environmentId: subject.environmentId });
   open.add(res);
+  const key = `${subject.deviceId}:${subject.environmentId}`;
 
   const onEvent = (event: BusEvent) => {
     if (event.type === "config.changed") {
@@ -47,7 +54,11 @@ export function streamAgentEvents(res: Response, subject: RuntimeSubject): void 
       return;
     }
     if (event.type === "webhook.deliver") {
-      if (event.deviceId === subject.deviceId && event.environmentId === subject.environmentId)
+      if (
+        event.deviceId === subject.deviceId &&
+        event.environmentId === subject.environmentId &&
+        isWebhookStream(key, res)
+      )
         void writeWebhook(res, subject, event.deliveryId);
       return;
     }
@@ -63,18 +74,28 @@ export function streamAgentEvents(res: Response, subject: RuntimeSubject): void 
         ),
     );
   };
+  webhookStreams.set(key, [...(webhookStreams.get(key) ?? []), res]);
   const unsubscribe = bus.subscribe(onEvent);
   const closeStream = streamOpened(subject.deviceId, subject.environmentId);
   // FR-WH-003: whatever waited while this device was away goes out now, oldest first.
-  void pendingFor(subject).then(
-    async (ids) => {
-      for (const id of ids) await writeWebhook(res, subject, id);
-    },
-    (err: unknown) =>
-      logger.error(`agent-events: pending webhooks — ${err instanceof Error ? err.message : String(err)}`),
-  );
+  const sendPending = (target: Response) =>
+    pendingFor(subject).then(
+      async (ids) => {
+        for (const id of ids) if (isWebhookStream(key, target)) await writeWebhook(target, subject, id);
+      },
+      (err: unknown) =>
+        logger.error(`agent-events: pending webhooks — ${err instanceof Error ? err.message : String(err)}`),
+    );
+  void sendPending(res);
   const heartbeat = setInterval(() => write(res, "heartbeat", {}), HEARTBEAT_MS);
   res.on("close", () => {
+    const wasActive = isWebhookStream(key, res);
+    const rest = (webhookStreams.get(key) ?? []).filter((r) => r !== res);
+    if (rest.length > 0) webhookStreams.set(key, rest);
+    else webhookStreams.delete(key);
+    // The previous stream takes over and re-sends whatever is still waiting.
+    const next = rest.at(-1);
+    if (wasActive && next) void sendPending(next);
     closeStream();
     clearInterval(heartbeat);
     unsubscribe();

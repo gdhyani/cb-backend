@@ -133,6 +133,8 @@ every reconnect uses a fresh access token.
   "stripe-signature": "t=…,v1=…" }, "body": "<base64>" }
 ```
 
+- One device may hold several streams for an environment; only the newest receives `webhook` events (the
+  previous one takes over when it closes).
 - Sent only to the device that created the objects the event names (or that opted in with
   `POST /api/agent/webhooks/listen`). Headers are signed with **this device's fake** signing secret (fresh
   timestamp per attempt); the real secret never leaves the backend.
