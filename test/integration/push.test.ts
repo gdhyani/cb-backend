@@ -113,6 +113,7 @@ async function scenario(withOauth = false) {
   const vars: [string, string, string][] = [
     ["FIREBASE_SERVICE_ACCOUNT", fcm.body.data.id, "credentialsJson"],
     ["FIREBASE_PRIVATE_KEY", fcm.body.data.id, "privateKey"],
+    ["GOOGLE_APPLICATION_CREDENTIALS", fcm.body.data.id, "credentialsFile"],
     ["APNS_KEY", apns.body.data.id, "key"],
     ["APNS_KEY_ID", apns.body.data.id, "keyId"],
     ["APNS_TEAM_ID", apns.body.data.id, "teamId"],
@@ -178,6 +179,9 @@ describe("google-sa and apns adapters (§10.8, FR-CRY-004)", () => {
     expect(sa.client_email).toBe(CLIENT_EMAIL);
     expect(sa.private_key).toBe(boot.plain.FIREBASE_PRIVATE_KEY);
     expect(boot.plain.APNS_KEY).toContain("BEGIN PRIVATE KEY");
+    // OQ8: the key-file form is a file the agent writes (same fake content), not an env value.
+    expect(boot.plain.GOOGLE_APPLICATION_CREDENTIALS).toBeUndefined();
+    expect(JSON.parse(boot.files.GOOGLE_APPLICATION_CREDENTIALS)).toEqual(sa);
     expect(boot.plain.APNS_KEY_ID).toBe(KEY_ID);
     expect(resources.fcm.config).not.toHaveProperty("privateKey");
     expect(boot.redirects.map((r: { host: string }) => r.host).sort()).toEqual([

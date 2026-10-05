@@ -1,6 +1,6 @@
 # cb API contract. Owned by cb-backend; consumers run `npm run sync:contract`.
 openapi: 3.1.0
-x-contract-version: 1.3.0
+x-contract-version: 1.4.0
 info:
   title: cb API
   version: 1.0.0
@@ -4404,6 +4404,10 @@ components:
           items:
             type: string
           description: Keys in `plain` that carry real values marked visible.
+        files:
+          type: object
+          additionalProperties: { type: string }
+          description: OQ8 — key → content of a fake key file the agent writes (0600) and points the key at.
       required:
         - schema
         - version
@@ -4765,6 +4769,15 @@ components:
               - api.example.com:443
           maxItems: 10
           default: []
+        caCert:
+          $ref: "#/components/schemas/CaCertificate"
+        extraHeaders:
+          type: object
+          maxProperties: 10
+          additionalProperties: { type: string, maxLength: 500 }
+          description: >-
+            OQ9: non-secret headers sent on every call (stored lowercased). Not allowed: authorization, x-api-key,
+            cookie, host and transport headers, or the named key header.
       required:
         - kind
         - name
@@ -4990,6 +5003,11 @@ components:
     UpdateResourceBody:
       type: object
       properties:
+        extraHeaders:
+          type: object
+          maxProperties: 10
+          additionalProperties: { type: string, maxLength: 500 }
+          description: OQ9 — replaces the service's extra headers ({} removes them).
         signingSecret:
           type: string
           minLength: 8
