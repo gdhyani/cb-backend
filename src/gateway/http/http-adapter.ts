@@ -10,6 +10,7 @@ import { safeEqual } from "../../crypto/safe-equal.js";
 import { recordAudit } from "../../services/audit.service.js";
 import { fakeApiKey } from "../../services/fakes.service.js";
 import { learnFromResponse, paymentProviderOf } from "../../services/webhook-owner.service.js";
+import { upstreamAllowed } from "../../utils/upstream-url.js";
 import { asSocketLike } from "../socket-like.js";
 import type { StreamAdapter, TunnelContext } from "../types.js";
 import { createRedactor } from "./redaction.js";
@@ -28,6 +29,9 @@ export interface HttpResourceConfig {
   fakePrefix?: string;
   basePath?: string;
   redirectHosts?: string[];
+  /** OQ9: private-CA certificate and non-secret headers for every call. */
+  caCert?: string;
+  extraHeaders?: Record<string, string>;
   /** Preset that made the service (stripe, razorpay…); payment providers get webhook owner tracking. */
   provider?: string;
 }
@@ -149,6 +153,12 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
       sendJson(res, 401, { error: "cb_invalid_credential" });
       return;
     }
+    // OQ11: a service saved while plain http was allowed is refused once the server turns it off.
+    if (!upstreamAllowed(config.upstreamUrl)) {
+      req.resume();
+      sendJson(res, 403, { error: "cb_upstream_not_allowed" });
+      return;
+    }
     const path = req.url ?? "/";
     const target = new URL(`${prefix}${path}`, upstream.origin);
     const headers: Record<string, string> = {};
@@ -157,7 +167,13 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
         headers[k] = Array.isArray(v) ? v.join(", ") : v;
     }
     const outHeaders = {
-      ...injectCredential(scheme, headers, ctx.secret, config.authHeader),
+      // The service's headers win over the app's; the credential is injected last, so nothing overrides it.
+      ...injectCredential(
+        scheme,
+        { ...headers, ...(config.extraHeaders ?? {}) },
+        ctx.secret,
+        config.authHeader,
+      ),
       host: upstream.host,
     };
     const method = req.method ?? "GET";
@@ -165,7 +181,7 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
       method: method as "GET",
       headers: outHeaders,
       body: method === "GET" || method === "HEAD" ? undefined : (req as unknown as Readable),
-      dispatcher: upstreamDispatcher(),
+      dispatcher: upstreamDispatcher(config.caCert),
     })
       .then(async (up) => {
         const out: Record<string, string | string[]> = {};

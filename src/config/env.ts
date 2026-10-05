@@ -22,6 +22,11 @@ const EnvSchema = z.object({
     .default("false")
     .transform((v) => v === "true"),
   UPSTREAM_EXTRA_CA_FILE: z.string().optional(),
+  /** OQ11 / D11: plain http to private addresses (local dev). Turn off for hosted, multi-tenant deployments. */
+  ALLOW_PRIVATE_HTTP_UPSTREAMS: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

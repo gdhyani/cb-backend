@@ -8,6 +8,7 @@ import { safeEqual } from "../../crypto/safe-equal.js";
 import { logger } from "../../logger/logger.js";
 import { recordAudit } from "../../services/audit.service.js";
 import { fakeAwsKeys } from "../../services/fakes.service.js";
+import { upstreamAllowed } from "../../utils/upstream-url.js";
 import type { TunnelContext } from "../types.js";
 import {
   type GatewayRequest,
@@ -75,6 +76,12 @@ export function createAwsHandler(ctx: TunnelContext): Handler {
 
   return (req: GatewayRequest, res: GatewayResponse) => {
     void (async () => {
+      // OQ11: refuse a plain-http endpoint saved before the server turned that off.
+      if (!upstreamAllowed(config.endpoint)) {
+        req.resume();
+        sendJson(res, 403, { error: "cb_upstream_not_allowed" });
+        return;
+      }
       const incoming = new URL(req.url ?? "/", "http://agent.local");
       const method = req.method ?? "GET";
       const presigned = incoming.searchParams.has("X-Amz-Credential");

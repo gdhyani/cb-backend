@@ -13,6 +13,7 @@ describe("loadEnv", () => {
       LOG_LEVEL: "info",
       DASHBOARD_URL: "http://localhost:4201",
       COOKIE_SECURE: false,
+      ALLOW_PRIVATE_HTTP_UPSTREAMS: true,
     });
   });
 

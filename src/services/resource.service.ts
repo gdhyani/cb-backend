@@ -35,7 +35,7 @@ export const BROKERED_FIELDS: Record<ResourceKind, readonly string[]> = {
   http: ["key", "baseUrl"],
   oauth: ["clientSecret"],
   aws: ["accessKeyId", "secretAccessKey", "endpoint", "region"],
-  "google-sa": ["credentialsJson", "projectId", "clientEmail", "privateKey"],
+  "google-sa": ["credentialsJson", "credentialsFile", "projectId", "clientEmail", "privateKey"],
   apns: ["key", "keyId", "teamId"],
   webhook: ["secret"],
 };
@@ -104,6 +104,34 @@ const WebhookPath = z
 const WebhookPort = z.number().int().min(1).max(65_535);
 const WebhookProviderEnum = z.enum(WEBHOOK_PROVIDERS);
 
+/** OQ9: non-secret headers sent on every call (e.g. OpenAI-Organization); never the credential or transport headers. */
+const RESERVED_HEADERS = new Set([
+  "authorization",
+  "proxy-authorization",
+  "x-api-key",
+  "cookie",
+  "host",
+  "content-length",
+  "transfer-encoding",
+  "connection",
+  "upgrade",
+  "te",
+  "keep-alive",
+]);
+const ExtraHeaders = z
+  .record(
+    z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/, "a header name such as OpenAI-Organization"),
+    z
+      .string()
+      .max(500)
+      .regex(/^[^\r\n]*$/, "one line"),
+  )
+  .refine((h) => Object.keys(h).length <= 10, "at most 10 headers")
+  .refine((h) => Object.keys(h).every((k) => !RESERVED_HEADERS.has(k.toLowerCase())), {
+    message: "the key header, cookies and transport headers are set by cb",
+  })
+  .transform((h) => Object.fromEntries(Object.entries(h).map(([k, v]) => [k.toLowerCase(), v])));
+
 /** UI hint only (which preset or dashboard type made this service); never read by the gateway. */
 const Provider = z.string().regex(/^[a-z0-9-]{1,40}$/);
 
@@ -160,6 +188,9 @@ export const CreateResourceBody = z
         .regex(/^(\/[^\s]*)?$/, "must start with /")
         .default(""),
       redirectHosts: z.array(HostPort).max(10).default([]),
+      /** OQ9: internal APIs on a private CA. */
+      caCert: PemCertificates.optional(),
+      extraHeaders: ExtraHeaders.optional(),
     }),
     z.object({
       kind: z.literal("aws"),
@@ -210,6 +241,8 @@ export const CreateResourceBody = z
         path: ["signingSecret"],
         message: "a Stripe signing secret starts with whsec_ (Developers → Webhooks → your endpoint)",
       });
+    if (b.kind === "http" && b.extraHeaders && b.authHeader && b.authHeader in b.extraHeaders)
+      ctx.addIssue({ code: "custom", path: ["extraHeaders"], message: "already carries the key" });
     if (b.kind === "http" && b.authScheme === "header" && !b.authHeader)
       ctx.addIssue({ code: "custom", path: ["authHeader"], message: "required with the named-header style" });
   });
@@ -249,6 +282,8 @@ export const UpdateResourceBody = z.object({
   fakePrefix: z.string().max(20).optional(),
   basePath: z.string().optional(),
   redirectHosts: z.array(HostPort).max(10).optional(),
+  /** OQ9: replaces the service's extra headers ({} removes them). */
+  extraHeaders: ExtraHeaders.optional(),
   disabled: z.boolean().optional(),
   /** D9: test the merged credential/config before storing; 422 SERVICE_TEST_FAILED when it fails. */
   test: z.boolean().optional(),
@@ -439,10 +474,16 @@ export function configAndSecret(
     "fakePrefix",
     "basePath",
     "redirectHosts",
+    "extraHeaders",
   ]) {
     if (input[key] !== undefined)
       config[key] =
         key === "redirectHosts" ? (input[key] as string[]).map((h) => h.toLowerCase()) : input[key];
+  }
+  // OQ9: CA certificate kept across updates, replaced when given, removed with "".
+  if (input.caCert !== undefined) {
+    if (input.caCert) config.caCert = input.caCert;
+    else delete config.caCert;
   }
   return { config, secret: input.apiKey as string | undefined };
 }

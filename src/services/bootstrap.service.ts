@@ -40,6 +40,8 @@ export interface BootstrapDto {
   listeners: { resourceId: string; kind: string; name: string; env: Record<string, string> }[];
   redirects: { host: string; port: number; resourceId: string }[];
   visibleKeys: string[];
+  /** OQ8: key → file content (fake key files, e.g. GOOGLE_APPLICATION_CREDENTIALS); the agent writes them. */
+  files: Record<string, string>;
 }
 
 interface HttpConfig {
@@ -97,6 +99,7 @@ export async function buildBootstrap(
   const masterKey = Buffer.from(getEnv().MASTER_KEY, "base64");
 
   const plain: Record<string, string> = {};
+  const files: Record<string, string> = {};
   const visibleKeys: string[] = [];
   const listeners = new Map<string, BootstrapDto["listeners"][number]>();
   const redirects = new Map<string, BootstrapDto["redirects"][number]>();
@@ -195,7 +198,9 @@ export async function buildBootstrap(
               token_uri: sa.tokenUri,
             });
           };
-          plain[v.key] = await value();
+          // The key-file form (GOOGLE_APPLICATION_CREDENTIALS) carries the same fake JSON as a file path (OQ8).
+          if (v.field === "credentialsFile") files[v.key] = await value();
+          else plain[v.key] = await value();
           redirectFor(r);
         } else if (r.kind === "apns") {
           const ap = config as unknown as { keyId: string; teamId: string };
@@ -253,6 +258,7 @@ export async function buildBootstrap(
     listeners: [...listeners.values()],
     redirects: [...redirects.values()],
     visibleKeys,
+    files,
   };
 }
 

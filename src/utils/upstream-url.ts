@@ -1,5 +1,6 @@
 import net from "node:net";
 import { z } from "zod";
+import { getEnv } from "../config/env.js";
 
 /** D11: plain http is allowed only to addresses that never leave a private network. */
 export function isPrivateHost(hostname: string): boolean {
@@ -13,12 +14,27 @@ export function isPrivateHost(hostname: string): boolean {
   return false;
 }
 
+/** OQ11: on unless ALLOW_PRIVATE_HTTP_UPSTREAMS=false (defaults apply before the env is loaded, e.g. unit tests). */
+export function privateHttpAllowed(): boolean {
+  try {
+    return getEnv().ALLOW_PRIVATE_HTTP_UPSTREAMS;
+  } catch {
+    return true;
+  }
+}
+
+/** D11 + OQ11: may the gateway call this URL? Used when saving and again when connecting. */
+export function upstreamAllowed(url: string): boolean {
+  if (url.startsWith("https://")) return true;
+  return url.startsWith("http://") && privateHttpAllowed() && isPrivateHost(new URL(url).hostname);
+}
+
 export const HttpsOnlyUrl = z.url().refine((u) => u.startsWith("https://"), "must be an https:// URL");
 
 /** https:// anywhere; http:// only for private or loopback addresses (TLS verification is never relaxed). */
-export const UpstreamUrl = z
-  .url()
-  .refine(
-    (u) => u.startsWith("https://") || (u.startsWith("http://") && isPrivateHost(new URL(u).hostname)),
-    "must be https:// (http:// only for private addresses such as 10.x, 192.168.x or localhost)",
-  );
+export const UpstreamUrl = z.url().refine((u) => upstreamAllowed(u), {
+  error: () =>
+    privateHttpAllowed()
+      ? "must be https:// (http:// only for private addresses such as 10.x, 192.168.x or localhost)"
+      : "must be https:// (plain http is turned off on this server)",
+});

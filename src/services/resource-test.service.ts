@@ -157,13 +157,18 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
       (config.authScheme as AuthScheme | undefined) ?? "bearer",
       {
         "user-agent": "cb-connection-test",
+        ...((config.extraHeaders as Record<string, string> | undefined) ?? {}),
         // Basic auth: the key ID (public) is the username, the stored secret the password.
         ...(basicUser ? { authorization: `Basic ${Buffer.from(`${basicUser}:`).toString("base64")}` } : {}),
       },
       secret,
       config.authHeader as string | undefined,
     );
-    const res = await request(base || "/", { method: "GET", headers, dispatcher: upstreamDispatcher() });
+    const res = await request(base || "/", {
+      method: "GET",
+      headers,
+      dispatcher: upstreamDispatcher(config.caCert),
+    });
     await res.body.dump();
     // On an authenticated test path some APIs answer a bad key with 400 (Gemini: API_KEY_INVALID).
     const rejected = [401, 403, ...(config.testPath ? [400] : [])];
