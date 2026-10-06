@@ -377,6 +377,8 @@ describe("FR-WH-001 Razorpay: cb generates the signing secret; the admin pastes 
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     const secret = r.body.data.service.generatedSecret as string;
     expect(secret).toMatch(/^[A-Za-z0-9_-]{32,}$/);
+    // The dashboard offers "New secret" only for secrets cb made (a typed one is the admin's own).
+    expect(r.body.data.service.config.secretOrigin).toBe("generated");
     const list = await owner.get(`/api/environments/${envId}/resources`);
     expect(JSON.stringify(list.body)).not.toContain(secret);
     const body = JSON.stringify({
@@ -520,5 +522,21 @@ describe("review fixes", () => {
     expect(again.body.data.queued).toBe(1);
     expect((await WebhookDeliveryModel.findOne({ eventRef: ev?._id }).lean())?.status).toBe("pending");
     void envId;
+  });
+});
+
+describe("FR-WH-001 where a Razorpay secret came from", () => {
+  it("a typed secret is marked as the admin's own; replacing it by hand keeps that", async () => {
+    const { owner, services } = await project({ stripeKey: false });
+    const r = await owner.post(services, {
+      key: "RAZORPAY_WEBHOOK_SECRET",
+      resource: { kind: "webhook", provider: "razorpay", path: "/w", signingSecret: "my-own-secret-123" },
+    });
+    expect(r.body.data.service.config.secretOrigin).toBe("typed");
+    const id = r.body.data.service.id as string;
+    const regen = await owner.patch(`/api/resources/${id}`, { regenerateSecret: true });
+    expect(regen.body.data.config.secretOrigin).toBe("generated");
+    const typed = await owner.patch(`/api/resources/${id}`, { signingSecret: "another-own-secret" });
+    expect(typed.body.data.config.secretOrigin).toBe("typed");
   });
 });
