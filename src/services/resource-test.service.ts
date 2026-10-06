@@ -231,6 +231,12 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
     const body = await res.body.text();
     if (res.statusCode === 200) return { ok: true, message: "Signed request accepted (ListBuckets ok)" };
     const code = /<Code>([^<]+)<\/Code>/.exec(body)?.[1];
+    // AccessDenied comes after AWS checked the key and signature: a key scoped to one bucket is a valid key.
+    if (res.statusCode === 403 && code === "AccessDenied")
+      return {
+        ok: true,
+        message: "Key accepted (signature valid); it can't list buckets, which is normal for a scoped key",
+      };
     return { ok: false, message: `Request rejected (HTTP ${res.statusCode}${code ? ` ${code}` : ""})` };
   },
   async "google-sa"(secret, config) {
