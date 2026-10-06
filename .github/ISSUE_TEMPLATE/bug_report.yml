@@ -1,0 +1,52 @@
+name: Bug report
+description: Something in cb-backend does not work as described.
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. **Never paste real secrets, tokens or customer data** — use stand-in values such as `sk_test_cb…`.
+        Security vulnerabilities go to https://github.com/gdhyani/cb-backend/security/advisories/new, not here.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `cb run -- npm run dev`
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output
+      description: Error messages, codes and correlation IDs. Remove anything secret first.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: "main @ 1a2b3c4"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Node.js version and browser if relevant.
+      placeholder: "macOS 15, Node.js 24, Chrome"
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety
+      options:
+        - label: This report contains no real secrets, tokens or personal data.
+          required: true
