@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { Types } from "mongoose";
 import { request } from "undici";
 import { z } from "zod";
@@ -7,149 +8,384 @@ import { AppError } from "../errors/app-error.js";
 import { upstreamDispatcher } from "../gateway/http/upstream.js";
 import { logger } from "../logger/logger.js";
 import { ResourceModel } from "../models/resource.model.js";
-import { parseWebhookSecrets, serializeWebhookSecrets } from "../webhooks/secrets.js";
+import { parseWebhookSecrets, serializeWebhookSecrets, type WebhookSecrets } from "../webhooks/secrets.js";
 import { requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { touchEnvironment } from "./environment.service.js";
 import { type ResourceDto, toResourceDto, webhookUrlOf } from "./resource.service.js";
 import { readResourceSecret } from "./resource-secret.service.js";
 
-const STRIPE_API = "https://api.stripe.com";
-const invalid = (message: string) => new AppError("VALIDATION_FAILED", { message });
-
-/** What cb reads from Stripe's answer (zod at the boundary); anything else counts as a failure. */
-const StripeBody = z.object({
-  id: z
-    .string()
-    .regex(/^we_[A-Za-z0-9]+$/)
-    .optional(),
-  secret: z.string().startsWith("whsec_").optional(),
-  error: z.object({ message: z.string().optional(), code: z.string().optional() }).optional(),
-});
-interface StripeAnswer {
-  status: number;
-  body: z.infer<typeof StripeBody>;
-}
-
-async function callStripe(
-  api: { base: string; key: string; caCert?: unknown },
-  path: string,
-  form: URLSearchParams,
-): Promise<StripeAnswer> {
-  const res = await request(new URL(path, api.base), {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${api.key}`,
-      "content-type": "application/x-www-form-urlencoded",
-    },
-    body: form.toString(),
-    dispatcher: upstreamDispatcher(api.caCert),
-    headersTimeout: 15_000,
-    bodyTimeout: 15_000,
-  });
-  const parsed = StripeBody.safeParse(await res.body.json().catch(() => ({})));
-  return parsed.success ? { status: res.statusCode, body: parsed.data } : { status: 502, body: {} };
-}
-
 /**
- * FR-WH-001 Connect Stripe: with the Stripe secret key already stored in this environment, cb creates (or points
- * again) a webhook endpoint at this service's cb URL for every event and keeps the signing secret Stripe returns.
- * No URL or secret is copied by hand; the secret is never shown (L15).
+ * FR-WH-001 Connect: with the provider's API key already stored in the same environment, cb creates (or points again)
+ * the provider's webhook at this service's cb URL and keeps the signing secret — nobody copies a URL or a secret.
+ * Stripe: full events (v1 endpoint, every event) and/or thin events (v2 event destination, a named event list).
+ * Razorpay: one webhook (v1 webhooks API, works with a merchant key) with a secret cb makes.
  */
-export async function connectStripeWebhook(
-  actorId: string,
-  resourceId: Types.ObjectId,
-): Promise<ResourceDto> {
-  const resource = await ResourceModel.findById(resourceId).lean();
-  if (resource?.kind !== "webhook") throw new AppError("NOT_FOUND", { message: "Webhook not found." });
-  await requireMembership(actorId, resource.orgId, "admin");
-  const config = (resource.config ?? {}) as Record<string, unknown>;
-  if (config.provider !== "stripe") throw invalid("Only Stripe webhooks can be connected automatically.");
 
-  const stripeKey = await ResourceModel.findOne({
-    environmentId: resource.environmentId,
+const STRIPE_API = "https://api.stripe.com";
+const RAZORPAY_API = "https://api.razorpay.com";
+/** Stripe's v2 API needs an explicit version. */
+const STRIPE_V2_VERSION = "2026-09-30.endive";
+/** Thin destinations cannot subscribe to every event (no "*"): the payment flows apps usually handle. */
+export const STRIPE_THIN_EVENTS = [
+  "v1.payment_intent.succeeded",
+  "v1.payment_intent.payment_failed",
+  "v1.payment_intent.canceled",
+  "v1.charge.succeeded",
+  "v1.charge.refunded",
+  "v1.checkout.session.completed",
+  "v1.checkout.session.expired",
+  "v1.customer.subscription.created",
+  "v1.customer.subscription.updated",
+  "v1.customer.subscription.deleted",
+  "v1.invoice.paid",
+  "v1.invoice.payment_failed",
+] as const;
+/** What a Razorpay integration usually listens to; more can be ticked in the Razorpay Dashboard. */
+export const RAZORPAY_EVENTS = [
+  "payment.authorized",
+  "payment.captured",
+  "payment.failed",
+  "order.paid",
+  "refund.created",
+  "refund.processed",
+  "refund.failed",
+] as const;
+
+export const ConnectBody = z
+  .object({
+    /** Stripe only: which payloads the app's code reads — full (constructEvent), thin (parseEventNotification). */
+    payloads: z
+      .array(z.enum(["full", "thin"]))
+      .min(1)
+      .max(2)
+      .optional(),
+  })
+  .strict();
+
+const invalid = (message: string) => new AppError("VALIDATION_FAILED", { message });
+const refused = (message: string, cause?: unknown) => new AppError("SERVICE_TEST_FAILED", { message, cause });
+
+interface Api {
+  base: string;
+  caCert?: unknown;
+}
+interface Answer {
+  status: number;
+  json: unknown;
+}
+
+async function call(
+  api: Api,
+  method: "POST" | "PUT" | "DELETE",
+  path: string,
+  headers: Record<string, string>,
+  body?: string,
+): Promise<Answer> {
+  try {
+    const res = await request(new URL(path, api.base), {
+      method,
+      headers,
+      body,
+      dispatcher: upstreamDispatcher(api.caCert),
+      headersTimeout: 15_000,
+      bodyTimeout: 15_000,
+    });
+    return { status: res.statusCode, json: await res.body.json().catch(() => ({})) };
+  } catch (err) {
+    throw refused("The provider could not be reached to set up the webhook. Try again.", err);
+  }
+}
+
+const ErrorBody = z.object({
+  error: z
+    .object({
+      message: z.string().optional(),
+      description: z.string().optional(),
+      code: z.string().optional(),
+    })
+    .optional(),
+});
+const reasonOf = (a: Answer) => {
+  const e = ErrorBody.safeParse(a.json);
+  return (e.success && (e.data.error?.message ?? e.data.error?.description)) || `HTTP ${a.status}`;
+};
+
+/** The environment's API key service for a provider, with its real key (decrypted per use). */
+async function providerKey(environmentId: Types.ObjectId, provider: "stripe" | "razorpay") {
+  const key = await ResourceModel.findOne({
+    environmentId,
     kind: "http",
-    "config.provider": "stripe",
+    "config.provider": provider,
     disabledAt: null,
   })
     .sort({ createdAt: 1 })
     .lean();
-  if (!stripeKey)
+  if (!key)
     throw invalid(
-      "Add your Stripe secret key (type Stripe) in this environment first; cb uses it to create the webhook in Stripe.",
+      provider === "stripe"
+        ? "Add your Stripe secret key (type Stripe) in this environment first; cb uses it to create the webhook in Stripe."
+        : "Add your Razorpay key (type Razorpay) in this environment first; cb uses it to create the webhook in Razorpay.",
     );
+  const config = (key.config ?? {}) as { upstreamUrl?: string; caCert?: unknown; basicUser?: string };
+  return { secret: await readResourceSecret(key._id), config };
+}
+
+// ---------------------------------------------------------------- Stripe
+
+const StripeEndpoint = z.object({
+  id: z.string().regex(/^we_[A-Za-z0-9]+$/),
+  secret: z.string().startsWith("whsec_").optional(),
+  livemode: z.boolean().optional(),
+});
+const StripeDestination = z.object({
+  id: z.string().regex(/^ed_[A-Za-z0-9_]+$/),
+  livemode: z.boolean().optional(),
+  webhook_endpoint: z.object({ signing_secret: z.string().startsWith("whsec_").nullish() }).optional(),
+});
+
+interface Connected {
+  id: string;
+  secret?: string;
+  livemode?: boolean;
+}
+
+async function stripeFull(
+  api: Api,
+  key: string,
+  url: string,
+  existing: string | undefined,
+  name: string,
+): Promise<Connected> {
+  const headers = { authorization: `Bearer ${key}`, "content-type": "application/x-www-form-urlencoded" };
+  if (existing) {
+    // Same endpoint, new address: Stripe keeps its signing secret.
+    const a = await call(
+      api,
+      "POST",
+      `/v1/webhook_endpoints/${encodeURIComponent(existing)}`,
+      headers,
+      new URLSearchParams({ url }).toString(),
+    );
+    const ok = StripeEndpoint.safeParse(a.json);
+    if (a.status < 300 && ok.success) return { id: ok.data.id, livemode: ok.data.livemode };
+    if (a.status !== 404) throw refused(`Stripe did not update the webhook: ${reasonOf(a)}.`);
+  }
+  const form = new URLSearchParams({ url, "enabled_events[]": "*", description: `cb: ${name}` });
+  const a = await call(api, "POST", "/v1/webhook_endpoints", headers, form.toString());
+  const ok = StripeEndpoint.safeParse(a.json);
+  if (a.status >= 300 || !ok.success || !ok.data.secret)
+    throw refused(
+      `Stripe did not create the webhook: ${a.status < 300 ? "no signing secret in Stripe's answer" : reasonOf(a)}. A restricted key needs "Webhook Endpoints: Write"; or paste the signing secret yourself.`,
+    );
+  return { id: ok.data.id, secret: ok.data.secret, livemode: ok.data.livemode };
+}
+
+async function stripeThin(
+  api: Api,
+  key: string,
+  url: string,
+  existing: string | undefined,
+  name: string,
+): Promise<Connected> {
+  const headers = {
+    authorization: `Bearer ${key}`,
+    "content-type": "application/json",
+    "stripe-version": STRIPE_V2_VERSION,
+  };
+  if (existing) {
+    const a = await call(
+      api,
+      "POST",
+      `/v2/core/event_destinations/${encodeURIComponent(existing)}`,
+      headers,
+      JSON.stringify({ webhook_endpoint: { url } }),
+    );
+    const ok = StripeDestination.safeParse(a.json);
+    if (a.status < 300 && ok.success) return { id: ok.data.id, livemode: ok.data.livemode };
+    if (a.status !== 404) throw refused(`Stripe did not update the thin events destination: ${reasonOf(a)}.`);
+  }
+  const a = await call(
+    api,
+    "POST",
+    "/v2/core/event_destinations",
+    headers,
+    JSON.stringify({
+      name: `cb: ${name}`.slice(0, 100),
+      type: "webhook_endpoint",
+      event_payload: "thin",
+      enabled_events: STRIPE_THIN_EVENTS,
+      webhook_endpoint: { url },
+      include: ["webhook_endpoint.signing_secret"],
+    }),
+  );
+  const ok = StripeDestination.safeParse(a.json);
+  const secret = ok.success ? ok.data.webhook_endpoint?.signing_secret : undefined;
+  if (a.status >= 300 || !ok.success || !secret)
+    throw refused(
+      `Stripe did not create the thin events destination: ${a.status < 300 ? "no signing secret in Stripe's answer" : reasonOf(a)}.`,
+    );
+  return { id: ok.data.id, secret, livemode: ok.data.livemode };
+}
+
+async function stripeRemove(api: Api, key: string, full?: string, thin?: string) {
+  if (full)
+    await call(api, "DELETE", `/v1/webhook_endpoints/${encodeURIComponent(full)}`, {
+      authorization: `Bearer ${key}`,
+    });
+  if (thin)
+    await call(api, "DELETE", `/v2/core/event_destinations/${encodeURIComponent(thin)}`, {
+      authorization: `Bearer ${key}`,
+      "stripe-version": STRIPE_V2_VERSION,
+    });
+}
+
+// ---------------------------------------------------------------- Razorpay
+
+const RazorpayWebhook = z.object({
+  id: z.string().regex(/^[A-Za-z0-9]{8,40}$/),
+  active: z.boolean().optional(),
+});
+/** Razorpay's webhook API takes events as { name: "1" | "0" }. */
+const razorpayEvents = (on: boolean) => Object.fromEntries(RAZORPAY_EVENTS.map((e) => [e, on ? "1" : "0"]));
+
+async function razorpayConnect(
+  api: Api,
+  auth: string,
+  url: string,
+  secret: string,
+  existing: string | undefined,
+): Promise<Connected> {
+  const headers = { authorization: auth, "content-type": "application/json" };
+  if (existing) {
+    // Razorpay's update replaces the URL and events; the stored secret stays valid.
+    const a = await call(
+      api,
+      "PUT",
+      `/v1/webhooks/${encodeURIComponent(existing)}`,
+      headers,
+      JSON.stringify({ url, events: razorpayEvents(true), active: true }),
+    );
+    const ok = RazorpayWebhook.safeParse(a.json);
+    if (a.status < 300 && ok.success) return { id: ok.data.id };
+    if (a.status !== 404) throw refused(`Razorpay did not update the webhook: ${reasonOf(a)}.`);
+  }
+  const a = await call(
+    api,
+    "POST",
+    "/v1/webhooks",
+    headers,
+    JSON.stringify({ url, secret, events: razorpayEvents(true) }),
+  );
+  const ok = RazorpayWebhook.safeParse(a.json);
+  if (a.status >= 300 || !ok.success)
+    throw refused(
+      `Razorpay did not create the webhook: ${a.status < 300 ? "unexpected answer" : reasonOf(a)}. You can add it in the Razorpay Dashboard with the URL and secret instead.`,
+    );
+  return { id: ok.data.id };
+}
+
+// ---------------------------------------------------------------- shared
+
+async function loadWebhook(actorId: string, resourceId: Types.ObjectId) {
+  const resource = await ResourceModel.findById(resourceId).lean();
+  if (resource?.kind !== "webhook") throw new AppError("NOT_FOUND", { message: "Webhook not found." });
+  await requireMembership(actorId, resource.orgId, "admin");
+  return resource;
+}
+
+/** FR-WH-001: connect (or reconnect) the provider side of a webhook service. */
+export async function connectWebhook(
+  actorId: string,
+  resourceId: Types.ObjectId,
+  input: z.infer<typeof ConnectBody> = {},
+): Promise<ResourceDto> {
+  const resource = await loadWebhook(actorId, resourceId);
+  const config = (resource.config ?? {}) as Record<string, unknown>;
+  const provider = config.provider;
+  if (provider !== "stripe" && provider !== "razorpay")
+    throw invalid("This webhook's provider can't be connected.");
+  if (provider === "razorpay" && input.payloads) throw invalid("Full and thin events are Stripe only.");
   const url = webhookUrlOf(resource._id.toHexString());
   if (!getEnv().PUBLIC_URL)
-    throw invalid("This cb server has no public address (PUBLIC_URL), so Stripe could not reach it.");
-  const keyConfig = (stripeKey.config ?? {}) as { upstreamUrl?: string; caCert?: unknown };
-  const api = {
-    base: keyConfig.upstreamUrl || STRIPE_API,
-    key: await readResourceSecret(stripeKey._id),
-    caCert: keyConfig.caCert,
-  };
+    throw invalid(
+      `This cb server has no public address (PUBLIC_URL), so ${provider === "stripe" ? "Stripe" : "Razorpay"} could not reach it.`,
+    );
+  const { secret: key, config: keyConfig } = await providerKey(resource.environmentId, provider);
+  const stored = parseWebhookSecrets(await readResourceSecret(resource._id));
+  const secrets: WebhookSecrets = { ...stored };
+  const next: Record<string, unknown> = { ...config, connectedUrl: url };
 
-  let endpointId = typeof config.stripeEndpointId === "string" ? config.stripeEndpointId : undefined;
-  let newSecret: string | undefined;
-  try {
-    let answer: StripeAnswer | undefined;
-    if (endpointId) {
-      // Same endpoint, new address (e.g. the cb URL changed): Stripe keeps its signing secret.
-      answer = await callStripe(
+  if (provider === "stripe") {
+    const api = { base: keyConfig.upstreamUrl || STRIPE_API, caCert: keyConfig.caCert };
+    const was =
+      (config.connectedPayloads as string[] | undefined) ?? (config.stripeEndpointId ? ["full"] : []);
+    const want = input.payloads ?? (was.length > 0 ? was : ["full"]);
+    let livemode: boolean | undefined;
+    if (want.includes("full")) {
+      const r = await stripeFull(api, key, url, config.stripeEndpointId as string | undefined, resource.name);
+      next.stripeEndpointId = r.id;
+      if (r.secret) secrets.snapshot = r.secret;
+      livemode = r.livemode ?? livemode;
+    }
+    if (want.includes("thin")) {
+      const r = await stripeThin(
         api,
-        `/v1/webhook_endpoints/${encodeURIComponent(endpointId)}`,
-        new URLSearchParams({ url }),
+        key,
+        url,
+        config.stripeThinDestinationId as string | undefined,
+        resource.name,
       );
-      if (answer.status === 404) {
-        endpointId = undefined;
-        answer = undefined;
+      next.stripeThinDestinationId = r.id;
+      next.thinEvents = [...STRIPE_THIN_EVENTS];
+      if (r.secret) secrets.thin = r.secret;
+      livemode = r.livemode ?? livemode;
+    }
+    // A payload no longer wanted is removed in Stripe too, so nothing keeps sending to a route the app dropped.
+    const dropFull = want.includes("full") ? undefined : (config.stripeEndpointId as string | undefined);
+    const dropThin = want.includes("thin")
+      ? undefined
+      : (config.stripeThinDestinationId as string | undefined);
+    if (dropFull || dropThin) {
+      await stripeRemove(api, key, dropFull, dropThin).catch(() => undefined);
+      if (dropFull) {
+        delete next.stripeEndpointId;
+        delete secrets.snapshot;
+      }
+      if (dropThin) {
+        delete next.stripeThinDestinationId;
+        delete next.thinEvents;
+        delete secrets.thin;
       }
     }
-    if (!answer) {
-      const form = new URLSearchParams({
-        url,
-        "enabled_events[]": "*",
-        description: `cb: ${resource.name}`,
-        "metadata[cb_service]": resource._id.toHexString(),
-      });
-      answer = await callStripe(api, "/v1/webhook_endpoints", form);
-      if (answer.status < 300 && answer.body.id && answer.body.secret) {
-        endpointId = answer.body.id;
-        newSecret = answer.body.secret;
-      } else if (answer.status < 300)
-        answer = { status: 502, body: { error: { message: "no signing secret in Stripe's answer" } } };
-    }
-    if (answer.status >= 300 || !endpointId || (!newSecret && !config.stripeEndpointId)) {
-      const reason = answer.body.error?.message ?? `HTTP ${answer.status}`;
-      throw new AppError("SERVICE_TEST_FAILED", {
-        message: `Stripe did not create the webhook: ${reason}. A restricted key needs "Webhook Endpoints: Write"; or paste the signing secret yourself.`,
-      });
-    }
-  } catch (err) {
-    if (err instanceof AppError) throw err;
-    throw new AppError("SERVICE_TEST_FAILED", {
-      message: "Stripe could not be reached to create the webhook. Try again.",
-      cause: err,
-    });
+    next.connectedPayloads = want;
+    if (livemode !== undefined) next.livemode = livemode;
+  } else {
+    const api = { base: keyConfig.upstreamUrl || RAZORPAY_API, caCert: keyConfig.caCert };
+    if (!keyConfig.basicUser)
+      throw invalid("The Razorpay key in this environment has no Key ID; edit it and add one.");
+    const auth = `Basic ${Buffer.from(`${keyConfig.basicUser}:${key}`).toString("base64")}`;
+    // The stored secret is reused (cb-made or typed); a new one only when there is none.
+    if (!secrets.snapshot) secrets.snapshot = randomBytes(32).toString("base64url");
+    const r = await razorpayConnect(
+      api,
+      auth,
+      url,
+      secrets.snapshot,
+      config.razorpayWebhookId as string | undefined,
+    );
+    next.razorpayWebhookId = r.id;
+    next.razorpayEvents = [...RAZORPAY_EVENTS];
+    next.livemode = keyConfig.basicUser.startsWith("rzp_live_");
   }
 
-  const stored = parseWebhookSecrets(await readResourceSecret(resource._id));
-  const secrets = { ...stored, ...(newSecret ? { snapshot: newSecret } : {}) };
-  const nextConfig = {
-    ...config,
-    stripeEndpointId: endpointId,
-    connectedUrl: url,
-    secretsSet: { snapshot: Boolean(secrets.snapshot), thin: Boolean(secrets.thin) },
-    ...(newSecret ? { secretOrigin: "connected" } : {}),
+  next.secretsSet = { snapshot: Boolean(secrets.snapshot), thin: Boolean(secrets.thin) };
+  next.secretOrigin = "connected";
+  const update: Record<string, unknown> = {
+    config: next,
+    credentials: encryptSecret(Buffer.from(getEnv().MASTER_KEY, "base64"), serializeWebhookSecrets(secrets)),
   };
-  const update: Record<string, unknown> = { config: nextConfig };
-  if (newSecret)
-    Object.assign(update, {
-      credentials: encryptSecret(
-        Buffer.from(getEnv().MASTER_KEY, "base64"),
-        serializeWebhookSecrets(secrets),
-      ),
-      rotatedAt: new Date(),
-    });
+  if (secrets.snapshot !== stored.snapshot || secrets.thin !== stored.thin) update.rotatedAt = new Date();
   const updated = await ResourceModel.findByIdAndUpdate(resource._id, update, {
     returnDocument: "after",
   }).lean();
@@ -164,6 +400,44 @@ export async function connectStripeWebhook(
     action: "resource.webhook_connected",
     target: resource.name,
   });
-  logger.info(`webhooks: ${resource.name} connected to Stripe endpoint ${endpointId}`);
+  logger.info(`webhooks: ${resource.name} connected to ${provider}`);
   return toResourceDto(updated);
+}
+
+/**
+ * When a connected webhook service is removed, its provider side goes too (Stripe: deleted; Razorpay: switched off —
+ * its API has no delete). Best effort: a failure is logged and never blocks removing the key.
+ */
+export async function disconnectWebhook(resource: {
+  environmentId: Types.ObjectId;
+  name: string;
+  config?: unknown;
+}): Promise<void> {
+  const config = (resource.config ?? {}) as Record<string, unknown>;
+  try {
+    if (config.provider === "stripe" && (config.stripeEndpointId || config.stripeThinDestinationId)) {
+      const { secret, config: keyConfig } = await providerKey(resource.environmentId, "stripe");
+      await stripeRemove(
+        { base: keyConfig.upstreamUrl || STRIPE_API, caCert: keyConfig.caCert },
+        secret,
+        config.stripeEndpointId as string | undefined,
+        config.stripeThinDestinationId as string | undefined,
+      );
+    }
+    if (config.provider === "razorpay" && config.razorpayWebhookId) {
+      const { secret, config: keyConfig } = await providerKey(resource.environmentId, "razorpay");
+      const auth = `Basic ${Buffer.from(`${keyConfig.basicUser ?? ""}:${secret}`).toString("base64")}`;
+      await call(
+        { base: keyConfig.upstreamUrl || RAZORPAY_API, caCert: keyConfig.caCert },
+        "PUT",
+        `/v1/webhooks/${encodeURIComponent(String(config.razorpayWebhookId))}`,
+        { authorization: auth, "content-type": "application/json" },
+        JSON.stringify({ url: config.connectedUrl, events: razorpayEvents(false), active: false }),
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      `webhooks: could not remove the provider side of ${resource.name} — ${(err as Error).message}`,
+    );
+  }
 }
