@@ -76,3 +76,35 @@ describe("Save & test for Basic-auth and 400-on-bad-key APIs (review I1, M2)", (
     srv.close();
   });
 });
+
+describe("AWS Save & test: a scoped key that may not list buckets is still a valid key", () => {
+  const s3 = async (answer: (auth: string) => { status: number; code?: string }) => {
+    const http = await import("node:http");
+    const srv = http.createServer((req, res) => {
+      const a = answer(String(req.headers.authorization ?? ""));
+      res.writeHead(a.status, { "content-type": "application/xml" });
+      res.end(a.code ? `<Error><Code>${a.code}</Code></Error>` : "<ListAllMyBucketsResult/>");
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    return { endpoint: `http://127.0.0.1:${(srv.address() as AddressInfo).port}`, close: () => srv.close() };
+  };
+  const secret = JSON.stringify({ accessKeyId: "AKIAEXAMPLE000000000", secretAccessKey: "x".repeat(40) });
+
+  it("AccessDenied (signature checked, action not allowed) passes with a clear note", async () => {
+    const srv = await s3(() => ({ status: 403, code: "AccessDenied" }));
+    const r = await runDraftTest("aws", secret, { region: "ap-southeast-1", endpoint: srv.endpoint });
+    expect(r.ok).toBe(true);
+    expect(r.message).toMatch(/key accepted.*can't list buckets/i);
+    srv.close();
+  });
+
+  it("a wrong key or secret still fails (InvalidAccessKeyId, SignatureDoesNotMatch)", async () => {
+    for (const code of ["InvalidAccessKeyId", "SignatureDoesNotMatch"]) {
+      const srv = await s3(() => ({ status: 403, code }));
+      const r = await runDraftTest("aws", secret, { region: "ap-southeast-1", endpoint: srv.endpoint });
+      expect(r.ok, code).toBe(false);
+      expect(r.message).toContain(code);
+      srv.close();
+    }
+  });
+});
