@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/gdhyani/cb-backend/security/advisories/new
+    about: Report vulnerabilities privately. Never open a public issue for them.
+  - name: Documentation
+    url: https://github.com/gdhyani/cb-dashboard/tree/main/content/docs
+    about: Guides, connector pages and reference for cb.

@@ -1,0 +1,45 @@
+name: Connector request
+description: Ask for a service that cb should broker (a database, an API, a cloud service…).
+title: "connector: "
+labels: ["connector"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tell us about the service. **Never paste a real key** — describe its format instead (for example "starts with `sk_live_`").
+  - type: input
+    id: service
+    attributes:
+      label: Service name
+      placeholder: "ClickHouse"
+    validations:
+      required: true
+  - type: input
+    id: protocol
+    attributes:
+      label: Protocol / SDK
+      description: The wire protocol or HTTP API, and the official SDK your app uses.
+      placeholder: "HTTPS JSON API, @clickhouse/client"
+    validations:
+      required: true
+  - type: textarea
+    id: auth
+    attributes:
+      label: How it authenticates
+      description: Where the credential goes (header, query string, connection URI, signed request, key file…) and its format.
+      placeholder: "Basic auth header with a username and password"
+    validations:
+      required: true
+  - type: input
+    id: docs
+    attributes:
+      label: Provider docs link
+      description: The provider's authentication documentation.
+      placeholder: "https://…"
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: How your app uses the service, and anything unusual (webhooks, regional endpoints, private CA…).
