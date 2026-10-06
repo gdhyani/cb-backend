@@ -5,6 +5,7 @@ import { safeEqual } from "../../crypto/safe-equal.js";
 import { logger } from "../../logger/logger.js";
 import { recordAudit } from "../../services/audit.service.js";
 import { fakeApiKey } from "../../services/fakes.service.js";
+import { DEFAULT_PROFILE } from "../../services/profile.service.js";
 import { healthTap } from "../../services/resource-health.service.js";
 import type { TunnelContext } from "../types.js";
 import {
@@ -109,7 +110,10 @@ export function createOAuthHandler(ctx: TunnelContext): Handler {
           up.statusCode,
           redactHeaders(plain.headers, secrets),
         );
-        const tap = swapped ? healthTap("oauth", up.statusCode, ctx.resource.id) : undefined;
+        const tap =
+          swapped && ctx.profile === DEFAULT_PROFILE
+            ? healthTap("oauth", up.statusCode, ctx.resource.id)
+            : undefined;
         await pipeline([
           plain.body,
           createRedactor(secrets),

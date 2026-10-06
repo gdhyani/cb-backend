@@ -9,6 +9,7 @@ import type { LeafCache } from "../../crypto/ca.js";
 import { safeEqual } from "../../crypto/safe-equal.js";
 import { recordAudit } from "../../services/audit.service.js";
 import { fakeApiKey } from "../../services/fakes.service.js";
+import { DEFAULT_PROFILE } from "../../services/profile.service.js";
 import { healthTap } from "../../services/resource-health.service.js";
 import { learnFromResponse, paymentProviderOf } from "../../services/webhook-owner.service.js";
 import { upstreamAllowed } from "../../utils/upstream-url.js";
@@ -220,7 +221,11 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
               )
             : undefined;
         // B11: what the provider said about the key (2xx ok, 401 rejected …), recorded without delaying the app.
-        const tap = healthTap("http", up.statusCode, ctx.resource.id);
+        // I2: only a request that carried the stored default key says anything about that key.
+        const tap =
+          own && ctx.profile === DEFAULT_PROFILE
+            ? healthTap("http", up.statusCode, ctx.resource.id)
+            : undefined;
         const steps = [createRedactor(secrets), ...(learn ? [learn] : []), ...(tap ? [tap] : [])];
         await pipeline([plain.body, ...steps, res as unknown as NodeJS.WritableStream]);
         void recordAudit({

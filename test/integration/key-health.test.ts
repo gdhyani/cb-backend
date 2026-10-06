@@ -114,6 +114,23 @@ describe("key health (B11): green when the provider accepts the key, Expired whe
     listener.close();
   });
 
+  it("I2 a pass-through request (not the stored key) never changes the key's status", async () => {
+    const { envId, id, token, health } = await setup(
+      { kind: "http", upstreamUrl: provider.url, apiKey: GOOD, passOtherKeys: true, fakePrefix: "sk_cb_" },
+      "key",
+    );
+    const listener = await localListener(base, token, { layer: "1", env: envId, resource: id });
+    // A user's own (public / expired) token passes through untouched; the provider refuses it with 401.
+    const res = await fetch(`http://127.0.0.1:${listener.port}/v1/models`, {
+      headers: { authorization: "Bearer user-jwt-expired" },
+    });
+    expect(res.status).toBe(401);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(await health()).toMatchObject({ status: "unknown" });
+    listener.close();
+  });
+
   it("Test connection records the result", async () => {
     const { owner, id, health } = await setup(
       { kind: "http", upstreamUrl: provider.url, apiKey: DELETED, testPath: "/v1/models" },
