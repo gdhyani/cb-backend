@@ -198,6 +198,11 @@ export const CreateResourceBody = z
       /** OQ9: internal APIs on a private CA. */
       caCert: PemCertificates.optional(),
       extraHeaders: ExtraHeaders.optional(),
+      /**
+       * Requests that carry another key (a public/publishable key) go through unchanged, never with the real key
+       * added (Supabase). A stand-in that is not the device's own is still refused.
+       */
+      passOtherKeys: z.boolean().optional(),
     }),
     z.object({
       kind: z.literal("aws"),
@@ -313,6 +318,7 @@ export const UpdateResourceBody = z.object({
   redirectHosts: z.array(HostPort).max(10).optional(),
   /** OQ9: replaces the service's extra headers ({} removes them). */
   extraHeaders: ExtraHeaders.optional(),
+  passOtherKeys: z.boolean().optional(),
   disabled: z.boolean().optional(),
   /** D9: test the merged credential/config before storing; 422 SERVICE_TEST_FAILED when it fails. */
   test: z.boolean().optional(),
@@ -539,6 +545,7 @@ export function configAndSecret(
     "basePath",
     "redirectHosts",
     "extraHeaders",
+    "passOtherKeys",
   ]) {
     if (input[key] !== undefined)
       config[key] =

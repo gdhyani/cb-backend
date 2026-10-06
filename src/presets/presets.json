@@ -12,12 +12,20 @@
       "fakePrefix": "sk-cb-",
       "testPath": "/v1/models",
       "basePath": "/v1",
-      "redirectHosts": ["api.openai.com:443"]
+      "redirectHosts": [
+        "api.openai.com:443"
+      ]
     },
-    "secretPlaceholder": "sk-proj-…",
+    "secretPlaceholder": "sk-proj-\u2026",
     "variables": [
-      { "key": "OPENAI_API_KEY", "field": "key" },
-      { "key": "OPENAI_BASE_URL", "field": "baseUrl" }
+      {
+        "key": "OPENAI_API_KEY",
+        "field": "key"
+      },
+      {
+        "key": "OPENAI_BASE_URL",
+        "field": "baseUrl"
+      }
     ]
   },
   {
@@ -33,12 +41,20 @@
       "fakePrefix": "sk-ant-cb-",
       "testPath": "/v1/models",
       "basePath": "",
-      "redirectHosts": ["api.anthropic.com:443"]
+      "redirectHosts": [
+        "api.anthropic.com:443"
+      ]
     },
-    "secretPlaceholder": "sk-ant-…",
+    "secretPlaceholder": "sk-ant-\u2026",
     "variables": [
-      { "key": "ANTHROPIC_API_KEY", "field": "key" },
-      { "key": "ANTHROPIC_BASE_URL", "field": "baseUrl" }
+      {
+        "key": "ANTHROPIC_API_KEY",
+        "field": "key"
+      },
+      {
+        "key": "ANTHROPIC_BASE_URL",
+        "field": "baseUrl"
+      }
     ]
   },
   {
@@ -55,10 +71,17 @@
       "fakePrefix": "AIzaCb",
       "testPath": "/v1beta/models",
       "basePath": "",
-      "redirectHosts": ["generativelanguage.googleapis.com:443"]
+      "redirectHosts": [
+        "generativelanguage.googleapis.com:443"
+      ]
     },
-    "secretPlaceholder": "AIza…",
-    "variables": [{ "key": "GEMINI_API_KEY", "field": "key" }]
+    "secretPlaceholder": "AIza\u2026",
+    "variables": [
+      {
+        "key": "GEMINI_API_KEY",
+        "field": "key"
+      }
+    ]
   },
   {
     "id": "groq",
@@ -73,10 +96,17 @@
       "fakePrefix": "gsk_cb_",
       "testPath": "/openai/v1/models",
       "basePath": "/openai/v1",
-      "redirectHosts": ["api.groq.com:443"]
+      "redirectHosts": [
+        "api.groq.com:443"
+      ]
     },
-    "secretPlaceholder": "gsk_…",
-    "variables": [{ "key": "GROQ_API_KEY", "field": "key" }]
+    "secretPlaceholder": "gsk_\u2026",
+    "variables": [
+      {
+        "key": "GROQ_API_KEY",
+        "field": "key"
+      }
+    ]
   },
   {
     "id": "mistral",
@@ -91,10 +121,17 @@
       "fakePrefix": "mistral_cb_",
       "testPath": "/v1/models",
       "basePath": "/v1",
-      "redirectHosts": ["api.mistral.ai:443"]
+      "redirectHosts": [
+        "api.mistral.ai:443"
+      ]
     },
     "secretPlaceholder": "the API key",
-    "variables": [{ "key": "MISTRAL_API_KEY", "field": "key" }]
+    "variables": [
+      {
+        "key": "MISTRAL_API_KEY",
+        "field": "key"
+      }
+    ]
   },
   {
     "id": "openrouter",
@@ -109,10 +146,40 @@
       "fakePrefix": "sk-or-cb-",
       "testPath": "/api/v1/key",
       "basePath": "/api/v1",
-      "redirectHosts": ["openrouter.ai:443"]
+      "redirectHosts": [
+        "openrouter.ai:443"
+      ]
     },
-    "secretPlaceholder": "sk-or-…",
-    "variables": [{ "key": "OPENROUTER_API_KEY", "field": "key" }]
+    "secretPlaceholder": "sk-or-\u2026",
+    "variables": [
+      {
+        "key": "OPENROUTER_API_KEY",
+        "field": "key"
+      }
+    ]
+  },
+  {
+    "id": "supabase",
+    "name": "Supabase",
+    "category": "Database",
+    "kind": "http",
+    "description": "Your project URL; the secret key is sent as apikey and Bearer. The publishable key passes through unchanged.",
+    "defaults": {
+      "upstreamUrl": "https://<project-ref>.supabase.co",
+      "authScheme": "header",
+      "authHeader": "apikey",
+      "fakePrefix": "sb_secret_cb_",
+      "testPath": "/rest/v1/",
+      "basePath": "",
+      "passOtherKeys": true
+    },
+    "secretPlaceholder": "sb_secret_\u2026",
+    "variables": [
+      {
+        "key": "SUPABASE_SECRET_KEY",
+        "field": "key"
+      }
+    ]
   },
   {
     "id": "stripe",
@@ -126,10 +193,17 @@
       "fakePrefix": "sk_test_cb_",
       "testPath": "/v1/balance",
       "basePath": "",
-      "redirectHosts": ["api.stripe.com:443"]
+      "redirectHosts": [
+        "api.stripe.com:443"
+      ]
     },
-    "secretPlaceholder": "sk_live_… or sk_test_…",
-    "variables": [{ "key": "STRIPE_SECRET_KEY", "field": "key" }]
+    "secretPlaceholder": "sk_live_\u2026 or sk_test_\u2026",
+    "variables": [
+      {
+        "key": "STRIPE_SECRET_KEY",
+        "field": "key"
+      }
+    ]
   },
   {
     "id": "razorpay",
@@ -143,11 +217,23 @@
       "fakePrefix": "cb_",
       "testPath": "/v1/payments?count=1",
       "basePath": "",
-      "redirectHosts": ["api.razorpay.com:443"]
+      "redirectHosts": [
+        "api.razorpay.com:443"
+      ]
     },
     "secretPlaceholder": "Razorpay key secret",
-    "variables": [{ "key": "RAZORPAY_KEY_SECRET", "field": "key" }],
-    "plainVariables": [{ "key": "RAZORPAY_KEY_ID", "hint": "Your rzp_… key id (not secret)" }]
+    "variables": [
+      {
+        "key": "RAZORPAY_KEY_SECRET",
+        "field": "key"
+      }
+    ],
+    "plainVariables": [
+      {
+        "key": "RAZORPAY_KEY_ID",
+        "hint": "Your rzp_\u2026 key id (not secret)"
+      }
+    ]
   },
   {
     "id": "google-oauth",
@@ -156,10 +242,22 @@
     "group": "oauth",
     "kind": "oauth",
     "description": "The client secret is swapped at Google's token endpoint; the client id stays plain.",
-    "defaults": { "tokenUrl": "https://oauth2.googleapis.com/token" },
-    "secretPlaceholder": "GOCSPX-…",
-    "variables": [{ "key": "GOOGLE_CLIENT_SECRET", "field": "clientSecret" }],
-    "plainVariables": [{ "key": "GOOGLE_CLIENT_ID", "hint": "…apps.googleusercontent.com" }]
+    "defaults": {
+      "tokenUrl": "https://oauth2.googleapis.com/token"
+    },
+    "secretPlaceholder": "GOCSPX-\u2026",
+    "variables": [
+      {
+        "key": "GOOGLE_CLIENT_SECRET",
+        "field": "clientSecret"
+      }
+    ],
+    "plainVariables": [
+      {
+        "key": "GOOGLE_CLIENT_ID",
+        "hint": "\u2026apps.googleusercontent.com"
+      }
+    ]
   },
   {
     "id": "github-oauth",
@@ -168,10 +266,22 @@
     "group": "oauth",
     "kind": "oauth",
     "description": "The client secret is swapped at GitHub's token endpoint.",
-    "defaults": { "tokenUrl": "https://github.com/login/oauth/access_token" },
+    "defaults": {
+      "tokenUrl": "https://github.com/login/oauth/access_token"
+    },
     "secretPlaceholder": "GitHub OAuth client secret",
-    "variables": [{ "key": "GITHUB_CLIENT_SECRET", "field": "clientSecret" }],
-    "plainVariables": [{ "key": "GITHUB_CLIENT_ID", "hint": "Iv1.…" }]
+    "variables": [
+      {
+        "key": "GITHUB_CLIENT_SECRET",
+        "field": "clientSecret"
+      }
+    ],
+    "plainVariables": [
+      {
+        "key": "GITHUB_CLIENT_ID",
+        "hint": "Iv1.\u2026"
+      }
+    ]
   },
   {
     "id": "firebase",
@@ -182,9 +292,18 @@
     "defaults": {},
     "secretPlaceholder": "Service-account JSON",
     "variables": [
-      { "key": "FIREBASE_PROJECT_ID", "field": "projectId" },
-      { "key": "FIREBASE_CLIENT_EMAIL", "field": "clientEmail" },
-      { "key": "FIREBASE_PRIVATE_KEY", "field": "privateKey" }
+      {
+        "key": "FIREBASE_PROJECT_ID",
+        "field": "projectId"
+      },
+      {
+        "key": "FIREBASE_CLIENT_EMAIL",
+        "field": "clientEmail"
+      },
+      {
+        "key": "FIREBASE_PRIVATE_KEY",
+        "field": "privateKey"
+      }
     ]
   },
   {
@@ -196,9 +315,18 @@
     "defaults": {},
     "secretPlaceholder": "-----BEGIN PRIVATE KEY-----",
     "variables": [
-      { "key": "APNS_KEY", "field": "key" },
-      { "key": "APNS_KEY_ID", "field": "keyId" },
-      { "key": "APNS_TEAM_ID", "field": "teamId" }
+      {
+        "key": "APNS_KEY",
+        "field": "key"
+      },
+      {
+        "key": "APNS_KEY_ID",
+        "field": "keyId"
+      },
+      {
+        "key": "APNS_TEAM_ID",
+        "field": "teamId"
+      }
     ]
   },
   {
@@ -207,13 +335,28 @@
     "category": "Storage",
     "kind": "aws",
     "description": "Requests and presigned URLs are re-signed with the real keys.",
-    "defaults": { "region": "us-east-1", "endpoint": "https://s3.us-east-1.amazonaws.com" },
+    "defaults": {
+      "region": "us-east-1",
+      "endpoint": "https://s3.us-east-1.amazonaws.com"
+    },
     "secretPlaceholder": "AWS secret access key",
     "variables": [
-      { "key": "AWS_ACCESS_KEY_ID", "field": "accessKeyId" },
-      { "key": "AWS_SECRET_ACCESS_KEY", "field": "secretAccessKey" },
-      { "key": "AWS_ENDPOINT_URL", "field": "endpoint" },
-      { "key": "AWS_REGION", "field": "region" }
+      {
+        "key": "AWS_ACCESS_KEY_ID",
+        "field": "accessKeyId"
+      },
+      {
+        "key": "AWS_SECRET_ACCESS_KEY",
+        "field": "secretAccessKey"
+      },
+      {
+        "key": "AWS_ENDPOINT_URL",
+        "field": "endpoint"
+      },
+      {
+        "key": "AWS_REGION",
+        "field": "region"
+      }
     ]
   },
   {
@@ -222,13 +365,28 @@
     "category": "Storage",
     "kind": "aws",
     "description": "S3-compatible; replace <account-id> in the endpoint.",
-    "defaults": { "region": "auto", "endpoint": "https://<account-id>.r2.cloudflarestorage.com" },
+    "defaults": {
+      "region": "auto",
+      "endpoint": "https://<account-id>.r2.cloudflarestorage.com"
+    },
     "secretPlaceholder": "R2 secret access key",
     "variables": [
-      { "key": "AWS_ACCESS_KEY_ID", "field": "accessKeyId" },
-      { "key": "AWS_SECRET_ACCESS_KEY", "field": "secretAccessKey" },
-      { "key": "AWS_ENDPOINT_URL", "field": "endpoint" },
-      { "key": "AWS_REGION", "field": "region" }
+      {
+        "key": "AWS_ACCESS_KEY_ID",
+        "field": "accessKeyId"
+      },
+      {
+        "key": "AWS_SECRET_ACCESS_KEY",
+        "field": "secretAccessKey"
+      },
+      {
+        "key": "AWS_ENDPOINT_URL",
+        "field": "endpoint"
+      },
+      {
+        "key": "AWS_REGION",
+        "field": "region"
+      }
     ]
   },
   {
@@ -238,12 +396,24 @@
     "kind": "smtp",
     "description": "SMTP with the API key as password (user is literally \"apikey\").",
     "defaults": {},
-    "secretPlaceholder": "smtp://apikey:SG.…@smtp.sendgrid.net:587",
+    "secretPlaceholder": "smtp://apikey:SG.\u2026@smtp.sendgrid.net:587",
     "variables": [
-      { "key": "SMTP_HOST", "field": "host" },
-      { "key": "SMTP_PORT", "field": "port" },
-      { "key": "SMTP_USER", "field": "user" },
-      { "key": "SMTP_PASS", "field": "password" }
+      {
+        "key": "SMTP_HOST",
+        "field": "host"
+      },
+      {
+        "key": "SMTP_PORT",
+        "field": "port"
+      },
+      {
+        "key": "SMTP_USER",
+        "field": "user"
+      },
+      {
+        "key": "SMTP_PASS",
+        "field": "password"
+      }
     ]
   },
   {
@@ -254,7 +424,12 @@
     "description": "Neon, Supabase, RDS or self-hosted Postgres.",
     "defaults": {},
     "secretPlaceholder": "postgresql://user:password@host:5432/db?sslmode=require",
-    "variables": [{ "key": "DATABASE_URL", "field": "url" }]
+    "variables": [
+      {
+        "key": "DATABASE_URL",
+        "field": "url"
+      }
+    ]
   },
   {
     "id": "mongodb",
@@ -264,7 +439,12 @@
     "description": "Single-host MongoDB with SCRAM-SHA-256 (mongodb+srv later).",
     "defaults": {},
     "secretPlaceholder": "mongodb://user:password@host:27017/db?authSource=admin",
-    "variables": [{ "key": "MONGODB_URI", "field": "url" }]
+    "variables": [
+      {
+        "key": "MONGODB_URI",
+        "field": "url"
+      }
+    ]
   },
   {
     "id": "redis",
@@ -274,6 +454,11 @@
     "description": "Redis with a password or ACL user.",
     "defaults": {},
     "secretPlaceholder": "redis://user:password@host:6379/0",
-    "variables": [{ "key": "REDIS_URL", "field": "url" }]
+    "variables": [
+      {
+        "key": "REDIS_URL",
+        "field": "url"
+      }
+    ]
   }
 ]
