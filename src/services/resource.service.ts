@@ -373,8 +373,17 @@ export function toResourceDto(r: {
 }
 
 /** Which signing secrets a webhook service has (shown to admins; the values never are). */
-function withSecretsSet(config: Record<string, unknown>, s: WebhookSecrets): Record<string, unknown> {
-  return { ...config, secretsSet: { snapshot: Boolean(s.snapshot), thin: Boolean(s.thin) } };
+function withSecretsSet(
+  config: Record<string, unknown>,
+  s: WebhookSecrets,
+  origin?: "typed" | "generated",
+): Record<string, unknown> {
+  return {
+    ...config,
+    secretsSet: { snapshot: Boolean(s.snapshot), thin: Boolean(s.thin) },
+    // Where the main secret came from: only a cb-made one may be regenerated from the dashboard.
+    ...(origin ? { secretOrigin: origin } : {}),
+  };
 }
 
 /** A Razorpay webhook secret made by cb: 32 random bytes, URL-safe. */
@@ -454,7 +463,10 @@ export function configAndSecret(
       thin: input.thinSigningSecret as string | undefined,
     };
     return given
-      ? { config: withSecretsSet(config, secrets), secret: serializeWebhookSecrets(secrets) }
+      ? {
+          config: withSecretsSet(config, secrets, input.signingSecret !== undefined ? "typed" : undefined),
+          secret: serializeWebhookSecrets(secrets),
+        }
       : { config, secret: undefined };
   }
   if (kind === "oauth") {
@@ -564,7 +576,7 @@ export async function createResource(
     // Razorpay: cb picks the secret; Stripe: Connect (or a paste) adds it later. Webhooks are refused until then.
     const secrets: WebhookSecrets = {};
     if (input.provider === "razorpay") secrets.snapshot = generatedSecret = generateWebhookSecret();
-    config = withSecretsSet(config, secrets);
+    config = withSecretsSet(config, secrets, generatedSecret ? "generated" : undefined);
     secret = serializeWebhookSecrets(secrets);
   }
   if (!secret) throw new AppError("VALIDATION_FAILED", { message: "Credentials are required." });
@@ -630,7 +642,11 @@ export async function updateResource(
         });
       next.snapshot = generatedSecret = generateWebhookSecret();
     }
-    config = withSecretsSet(config, next);
+    config = withSecretsSet(
+      config,
+      next,
+      input.regenerateSecret ? "generated" : input.signingSecret !== undefined ? "typed" : undefined,
+    );
     secret = serializeWebhookSecrets(next);
   }
   // M1: the merged config must stay usable.

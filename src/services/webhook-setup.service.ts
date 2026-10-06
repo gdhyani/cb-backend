@@ -139,6 +139,7 @@ export async function connectStripeWebhook(
     stripeEndpointId: endpointId,
     connectedUrl: url,
     secretsSet: { snapshot: Boolean(secrets.snapshot), thin: Boolean(secrets.thin) },
+    ...(newSecret ? { secretOrigin: "connected" } : {}),
   };
   const update: Record<string, unknown> = { config: nextConfig };
   if (newSecret)
