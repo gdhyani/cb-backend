@@ -13,6 +13,7 @@ import {
   configAndSecret,
   createResource,
   MAIN_FIELD,
+  purgeResources,
   type ResourceDto,
 } from "./resource.service.js";
 import { markHealth } from "./resource-health.service.js";
@@ -127,7 +128,7 @@ export async function createService(
   } catch (err) {
     // No Mongo transactions here: undo what this request created, then report the original error.
     await VariableModel.deleteMany({ resourceId: service.id });
-    await ResourceModel.deleteOne({ _id: service.id });
+    await purgeResources({ _id: service.id });
     throw err;
   }
 }

@@ -5,7 +5,6 @@ import { bus } from "../events/bus.js";
 import { EnvironmentModel } from "../models/environment.model.js";
 import { GrantModel } from "../models/grant.model.js";
 import { ProjectModel } from "../models/project.model.js";
-import { ResourceModel } from "../models/resource.model.js";
 import { VariableModel } from "../models/variable.model.js";
 import { hasEnvironmentAccess, loadProject, requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
@@ -167,9 +166,10 @@ export async function updateProject(
 export async function deleteProject(actorId: string, projectId: Types.ObjectId): Promise<void> {
   const { project } = await loadProject(actorId, projectId, "admin");
   const envIds = (await EnvironmentModel.find({ projectId }).select("_id").lean()).map((e) => e._id);
+  const { purgeResources } = await import("./resource.service.js");
   await Promise.all([
     VariableModel.deleteMany({ environmentId: { $in: envIds } }),
-    ResourceModel.deleteMany({ environmentId: { $in: envIds } }),
+    purgeResources({ environmentId: { $in: envIds } }),
     GrantModel.updateMany({ projectId, revokedAt: null }, { revokedAt: new Date(), revokedBy: actorId }),
     EnvironmentModel.deleteMany({ projectId }),
   ]);

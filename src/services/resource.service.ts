@@ -679,6 +679,10 @@ export async function createResource(
     config: stored.config,
     ...(credentialsFile ? { credentialsFile } : { credentials: encryptSecret(masterKey(), secret) }),
     rotatedAt: new Date(),
+  }).catch(async (err: unknown) => {
+    // I4: a refused create (e.g. a duplicate-name race on the unique index) leaves no stored file behind.
+    await removeSecretFiles([credentialsFile, stored.config.caCertFile as FileRef | undefined]);
+    throw err;
   });
   if (opts.touch !== false) await touchEnvironment(envId);
   await recordAudit({
@@ -807,9 +811,18 @@ export async function updateResource(
   } else if (secret)
     Object.assign(update, { credentials: encryptSecret(masterKey(), secret), rotatedAt: new Date() });
   if (input.disabled !== undefined) update.disabledAt = input.disabled ? new Date() : null;
+  const fresh = [
+    update.credentialsFile as FileRef | undefined,
+    stored.config.caCertFile !== previousCa ? (stored.config.caCertFile as FileRef | undefined) : undefined,
+  ];
   const updated = await ResourceModel.findByIdAndUpdate(resourceId, update, {
     returnDocument: "after",
-  }).lean();
+  })
+    .lean()
+    .catch(async (err: unknown) => {
+      await removeSecretFiles(fresh); // I4: a failed update leaves no new object
+      throw err;
+    });
   if (!updated) throw new AppError("NOT_FOUND", { message: "Resource not found." });
   await removeSecretFiles(stale);
   if (input.disabled === true)
@@ -832,6 +845,28 @@ export async function updateResource(
   return { ...toResourceDto(updated), ...(generatedSecret ? { generatedSecret } : {}) };
 }
 
+/**
+ * Y5 / I4: removes services and everything that only exists for them — credential profiles, devices' fake keys,
+ * swapped Google tokens and stored files. Every delete path (one service, an environment, a project, a rollback) uses it.
+ */
+export async function purgeResources(filter: Record<string, unknown>): Promise<void> {
+  const rows = await ResourceModel.find(filter).select("+credentialsFile").lean();
+  if (rows.length === 0) return;
+  const ids = rows.map((r) => r._id);
+  await Promise.all([
+    CredentialProfileModel.deleteMany({ resourceId: { $in: ids } }),
+    FakeKeyModel.deleteMany({ resourceId: { $in: ids } }),
+    TokenSwapModel.deleteMany({ resourceId: { $in: ids } }),
+  ]);
+  await ResourceModel.deleteMany({ _id: { $in: ids } });
+  await removeSecretFiles(
+    rows.flatMap((r) => [
+      r.credentialsFile as FileRef | undefined,
+      (r.config as Record<string, unknown> | undefined)?.caCertFile as FileRef | undefined,
+    ]),
+  );
+}
+
 export async function deleteResource(actorId: string, resourceId: Types.ObjectId): Promise<void> {
   const resource = await loadResource(actorId, resourceId, "admin");
   if (resource.kind === "webhook") {
@@ -840,16 +875,7 @@ export async function deleteResource(actorId: string, resourceId: Types.ObjectId
     await disconnectWebhook(resource);
   }
   await VariableModel.deleteMany({ resourceId });
-  await CredentialProfileModel.deleteMany({ resourceId });
-  // Y5: nothing of the service stays behind — its devices' fake keys and the real Google tokens swapped for them.
-  await FakeKeyModel.deleteMany({ resourceId });
-  await TokenSwapModel.deleteMany({ resourceId });
-  const files = await ResourceModel.findById(resourceId).select("+credentialsFile").lean();
-  await ResourceModel.deleteOne({ _id: resourceId });
-  await removeSecretFiles([
-    files?.credentialsFile as FileRef | undefined,
-    (files?.config as Record<string, unknown> | undefined)?.caCertFile as FileRef | undefined,
-  ]);
+  await purgeResources({ _id: resourceId });
   await GrantModel.updateMany(
     { "resourceProfiles.resourceId": resourceId },
     { $pull: { resourceProfiles: { resourceId } } },

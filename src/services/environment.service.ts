@@ -4,7 +4,6 @@ import { AppError } from "../errors/app-error.js";
 import { bus } from "../events/bus.js";
 import { EnvironmentModel } from "../models/environment.model.js";
 import { GrantModel } from "../models/grant.model.js";
-import { ResourceModel } from "../models/resource.model.js";
 import { VariableModel } from "../models/variable.model.js";
 import { hasEnvironmentAccess, loadEnvironment, loadProject } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
@@ -159,9 +158,11 @@ export async function updateEnvironment(
 
 export async function deleteEnvironment(actorId: string, envId: Types.ObjectId): Promise<void> {
   const { env } = await loadEnvironment(actorId, envId, "admin");
+  // Loaded lazily: resource.service depends on this module (load-order cycle).
+  const { purgeResources } = await import("./resource.service.js");
   await Promise.all([
     VariableModel.deleteMany({ environmentId: envId }),
-    ResourceModel.deleteMany({ environmentId: envId }),
+    purgeResources({ environmentId: envId }),
     GrantModel.updateMany(
       { environmentId: envId, revokedAt: null },
       { revokedAt: new Date(), revokedBy: actorId },

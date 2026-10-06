@@ -175,3 +175,83 @@ describe("migration: existing files into the store (B10)", () => {
     expect((await migrateFilesToStore({ apply: true })).changes).toHaveLength(0);
   });
 });
+
+describe("nothing left behind on bulk delete or failure (I4, Y5)", () => {
+  const counts = async () => ({
+    files: await StoredFileModel.countDocuments(),
+    fakeKeys: await mongoose.connection.db?.collection("fakekeys").countDocuments(),
+    resources: await ResourceModel.countDocuments(),
+  });
+
+  it("I4 deleting an environment removes its services' stored files and fake keys", async () => {
+    const { owner, envId, add } = await env();
+    await add("FIREBASE_SERVICE_ACCOUNT", {
+      kind: "google-sa",
+      serviceAccountJson: serviceAccountJson().json,
+    });
+    const ca = await createCa("Env CA");
+    await add("DATABASE_URL", {
+      kind: "mysql",
+      connectionUri: "mysql://u:REAL_PW_FS_9@db.example.com:1/app",
+      caCert: ca.certPem,
+    });
+    await mongoose.connection.db
+      ?.collection("fakekeys")
+      .insertOne({
+        resourceId: new Types.ObjectId(),
+        deviceId: new Types.ObjectId(),
+        publicPem: "x",
+        privateKey: {},
+      });
+    const resIds = (await ResourceModel.find({}).lean()).map((r) => r._id);
+    await mongoose.connection.db?.collection("fakekeys").updateMany({}, { $set: { resourceId: resIds[0] } });
+    expect((await counts()).files).toBe(2);
+    expect((await owner.delete(`/api/environments/${envId}`)).status).toBe(200);
+    expect(await counts()).toMatchObject({ files: 0, fakeKeys: 0, resources: 0 });
+  });
+
+  it("I4 deleting a project removes every stored file of its services", async () => {
+    const { owner, envId, add } = await env();
+    await add("FIREBASE_SERVICE_ACCOUNT", {
+      kind: "google-sa",
+      serviceAccountJson: serviceAccountJson().json,
+    });
+    const projectId = (await owner.get(`/api/environments/${envId}`)).body.data.projectId;
+    expect((await owner.delete(`/api/projects/${projectId}`)).status).toBe(200);
+    expect(await counts()).toMatchObject({ files: 0, resources: 0 });
+  });
+
+  it("I4 a create that fails after the file was stored leaves no object (duplicate name)", async () => {
+    const { owner, envId } = await env();
+    const body = { kind: "google-sa", name: "firebase", serviceAccountJson: serviceAccountJson().json };
+    expect((await owner.post(`/api/environments/${envId}/resources`, body)).status).toBe(201);
+    const dup = await owner.post(`/api/environments/${envId}/resources`, {
+      ...body,
+      serviceAccountJson: serviceAccountJson().json,
+    });
+    expect(dup.status).toBe(409);
+    expect((await counts()).files).toBe(1);
+  });
+
+  it("I4 a service whose variable can't be created is rolled back with its stored file", async () => {
+    const { owner, envId } = await env();
+    expect(
+      (
+        await owner.post(`/api/environments/${envId}/variables`, {
+          type: "plain",
+          key: "FIREBASE_PROJECT_ID",
+          value: "taken",
+        })
+      ).status,
+    ).toBe(201);
+    const r = await owner.post(`/api/environments/${envId}/services`, {
+      key: "GOOGLE_APPLICATION_CREDENTIALS",
+      mainField: "credentialsFile",
+      test: false,
+      resource: { kind: "google-sa", serviceAccountJson: serviceAccountJson().json },
+      extras: [{ key: "FIREBASE_PROJECT_ID", field: "projectId" }],
+    });
+    expect(r.status).toBeGreaterThanOrEqual(400);
+    expect(await counts()).toMatchObject({ files: 0, resources: 0 });
+  });
+});
