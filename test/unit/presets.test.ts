@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { listPresets } from "../../src/services/preset.service.js";
 import { CreateResourceBody } from "../../src/services/resource.service.js";
+import { serviceAccountJson } from "../helpers/sweep.js";
 
 const PEM = "-----BEGIN PRIVATE KEY-----x";
 const SECRET: Record<string, Record<string, string>> = {
@@ -12,7 +13,7 @@ const SECRET: Record<string, Record<string, string>> = {
   smtp: { connectionUri: "smtp://u:p@h:587" },
   aws: { accessKeyId: "AKIA1", secretAccessKey: "12345678" },
   "google-sa": {
-    serviceAccountJson: JSON.stringify({ project_id: "p", client_email: "e@p", private_key: PEM }),
+    serviceAccountJson: serviceAccountJson().json,
   },
   apns: { keyId: "ABC123DEFG", teamId: "DEF123GHIJ", privateKey: PEM },
 };

@@ -1,4 +1,4 @@
-import { randomBytes, X509Certificate } from "node:crypto";
+import { createPrivateKey, randomBytes, X509Certificate } from "node:crypto";
 import type { Types } from "mongoose";
 import { z } from "zod";
 import { getEnv } from "../config/env.js";
@@ -62,12 +62,27 @@ export const MAIN_FIELD: Record<ResourceKind, string> = {
 const GOOGLE_DEFAULT_HOSTS = ["oauth2.googleapis.com:443", "fcm.googleapis.com:443"];
 const APNS_DEFAULT_HOSTS = ["api.push.apple.com:443", "api.sandbox.push.apple.com:443"];
 const HttpsUrl = HttpsOnlyUrl;
-const PemPrivateKey = z.string().refine((k) => k.includes("PRIVATE KEY-----"), "must be a PEM private key");
+/** Uploaded files arrive as saved on any OS: drop a BOM, use LF line endings, trim (then validate). */
+const normalizeFile = (s: string) =>
+  s
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n?/g, "\n")
+    .trim();
+
+const PemPrivateKey = z
+  .string()
+  .transform(normalizeFile)
+  .refine((k) => k.includes("PRIVATE KEY-----"), "must be a PEM private key");
 
 /** Public CA certificate(s) a self-hosted or private-CA database presents; trusted for that resource only. */
 const PemCertificates = z
   .string()
   .max(32_000)
+  .transform(normalizeFile)
+  .refine(
+    (pem) => !pem.includes("PRIVATE KEY-----"),
+    "this is a private key — use the provider's CA certificate (ca.pem)",
+  )
   .refine((pem) => {
     const blocks = pem.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? [];
     if (blocks.length === 0) return false;
@@ -80,18 +95,32 @@ const PemCertificates = z
   }, "must be one or more PEM certificates (-----BEGIN CERTIFICATE-----)");
 
 /** A Google service-account JSON key file (Firebase Admin). */
-const ServiceAccountJson = z.string().refine((raw) => {
-  try {
-    const sa = JSON.parse(raw) as Record<string, unknown>;
-    return (
-      typeof sa.client_email === "string" &&
-      typeof sa.private_key === "string" &&
-      typeof sa.project_id === "string"
-    );
-  } catch {
-    return false;
-  }
-}, "must be a service-account JSON key with project_id, client_email and private_key");
+const ServiceAccountJson = z
+  .string()
+  .transform(normalizeFile)
+  .superRefine((raw, ctx) => {
+    // Messages name the problem, never the content (B4).
+    const fail = (message: string) => ctx.addIssue({ code: "custom", message });
+    let sa: Record<string, unknown>;
+    try {
+      sa = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return fail(
+        raw.includes("BEGIN CERTIFICATE")
+          ? "this is a certificate, not a service-account key file"
+          : "not a JSON file — download the key from Firebase → Project settings → Service accounts",
+      );
+    }
+    if (sa.type !== undefined && sa.type !== "service_account")
+      return fail("this JSON is not a service-account key (its type is not service_account)");
+    for (const field of ["project_id", "client_email", "private_key"])
+      if (typeof sa[field] !== "string" || !sa[field]) return fail(`the key file has no ${field}`);
+    try {
+      createPrivateKey(String(sa.private_key));
+    } catch {
+      fail("the key file's private_key is not a valid private key");
+    }
+  });
 
 const HostPort = z.string().regex(/^[a-z0-9.-]+:\d{1,5}$/i, "use host:port, e.g. api.stripe.com:443");
 const Name = z.string().trim().min(1).max(60);
