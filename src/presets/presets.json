@@ -12,9 +12,7 @@
       "fakePrefix": "sk-cb-",
       "testPath": "/v1/models",
       "basePath": "/v1",
-      "redirectHosts": [
-        "api.openai.com:443"
-      ]
+      "redirectHosts": ["api.openai.com:443"]
     },
     "secretPlaceholder": "sk-proj-\u2026",
     "variables": [
@@ -41,9 +39,7 @@
       "fakePrefix": "sk-ant-cb-",
       "testPath": "/v1/models",
       "basePath": "",
-      "redirectHosts": [
-        "api.anthropic.com:443"
-      ]
+      "redirectHosts": ["api.anthropic.com:443"]
     },
     "secretPlaceholder": "sk-ant-\u2026",
     "variables": [
@@ -71,9 +67,7 @@
       "fakePrefix": "AIzaCb",
       "testPath": "/v1beta/models",
       "basePath": "",
-      "redirectHosts": [
-        "generativelanguage.googleapis.com:443"
-      ]
+      "redirectHosts": ["generativelanguage.googleapis.com:443"]
     },
     "secretPlaceholder": "AIza\u2026",
     "variables": [
@@ -96,9 +90,7 @@
       "fakePrefix": "gsk_cb_",
       "testPath": "/openai/v1/models",
       "basePath": "/openai/v1",
-      "redirectHosts": [
-        "api.groq.com:443"
-      ]
+      "redirectHosts": ["api.groq.com:443"]
     },
     "secretPlaceholder": "gsk_\u2026",
     "variables": [
@@ -121,9 +113,7 @@
       "fakePrefix": "mistral_cb_",
       "testPath": "/v1/models",
       "basePath": "/v1",
-      "redirectHosts": [
-        "api.mistral.ai:443"
-      ]
+      "redirectHosts": ["api.mistral.ai:443"]
     },
     "secretPlaceholder": "the API key",
     "variables": [
@@ -146,9 +136,7 @@
       "fakePrefix": "sk-or-cb-",
       "testPath": "/api/v1/key",
       "basePath": "/api/v1",
-      "redirectHosts": [
-        "openrouter.ai:443"
-      ]
+      "redirectHosts": ["openrouter.ai:443"]
     },
     "secretPlaceholder": "sk-or-\u2026",
     "variables": [
@@ -193,9 +181,7 @@
       "fakePrefix": "sk_test_cb_",
       "testPath": "/v1/balance",
       "basePath": "",
-      "redirectHosts": [
-        "api.stripe.com:443"
-      ]
+      "redirectHosts": ["api.stripe.com:443"]
     },
     "secretPlaceholder": "sk_live_\u2026 or sk_test_\u2026",
     "variables": [
@@ -217,9 +203,7 @@
       "fakePrefix": "cb_",
       "testPath": "/v1/payments?count=1",
       "basePath": "",
-      "redirectHosts": [
-        "api.razorpay.com:443"
-      ]
+      "redirectHosts": ["api.razorpay.com:443"]
     },
     "secretPlaceholder": "Razorpay key secret",
     "variables": [
