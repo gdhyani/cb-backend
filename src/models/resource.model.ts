@@ -28,6 +28,11 @@ const ResourceSchema = new Schema(
     config: { type: Schema.Types.Mixed, default: {} },
     /** Write-only real credentials (L15). */
     credentials: { type: EncryptedSecretSchema, select: false },
+    /** B10: uploaded-file secrets (service-account JSON, .p8) live in the file store; this is the reference. */
+    credentialsFile: {
+      type: new Schema({ store: String, path: String, sha256: String, size: Number }, { _id: false }),
+      select: false,
+    },
     rotatedAt: { type: Date, default: null },
     disabledAt: { type: Date, default: null },
   },

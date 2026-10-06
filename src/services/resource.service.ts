@@ -1,5 +1,5 @@
 import { createPrivateKey, randomBytes, X509Certificate } from "node:crypto";
-import type { Types } from "mongoose";
+import { Types } from "mongoose";
 import { z } from "zod";
 import { getEnv } from "../config/env.js";
 import { encryptSecret } from "../crypto/envelope.js";
@@ -27,6 +27,15 @@ import { loadEnvironment, requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { touchEnvironment } from "./environment.service.js";
 import { readResourceSecret } from "./resource-secret.service.js";
+import {
+  type CaFileRef,
+  type FileRef,
+  removeSecretFiles,
+  sameFile,
+  saveCaFile,
+  saveSecretFile,
+  withCaCert,
+} from "./secret-file.service.js";
 
 /** Which variable fields each resource kind can broker. */
 export const BROKERED_FIELDS: Record<ResourceKind, readonly string[]> = {
@@ -403,7 +412,7 @@ export function toResourceDto(r: {
     environmentId: r.environmentId.toHexString(),
     kind,
     name: r.name,
-    config: (r.config as Record<string, unknown>) ?? {},
+    config: publicConfig((r.config as Record<string, unknown>) ?? {}),
     credentialsSet: true,
     rotatedAt: r.rotatedAt?.toISOString() ?? null,
     disabled: Boolean(r.disabledAt),
@@ -411,6 +420,30 @@ export function toResourceDto(r: {
     createdAt: (r.createdAt ?? new Date()).toISOString(),
     ...(kind === "webhook" ? { webhookUrl: webhookUrlOf(r._id.toHexString()) } : {}),
   };
+}
+
+/** Kinds whose secret is an uploaded file, kept in the file store (B10). */
+const FILE_KINDS = new Set<ResourceKind>(["google-sa", "apns"]);
+
+/** What admins see of a stored CA: whose it is and until when — never the PEM or where it is stored. */
+function publicConfig(config: Record<string, unknown>): Record<string, unknown> {
+  const ref = config.caCertFile as CaFileRef | undefined;
+  if (!ref) return config;
+  const { caCertFile: _ref, ...rest } = config;
+  return { ...rest, caCertFile: { subject: ref.subject, notAfter: ref.notAfter, size: ref.size } };
+}
+
+/** Moves an inline `caCert` into the file store; keeps the stored object when the same CA is sent again. */
+async function storeCa(
+  orgId: Types.ObjectId,
+  resourceId: Types.ObjectId,
+  config: Record<string, unknown>,
+  previous?: CaFileRef,
+): Promise<{ config: Record<string, unknown>; stale?: FileRef }> {
+  const { caCert, caCertFile: _old, ...rest } = config;
+  if (typeof caCert !== "string" || !caCert) return { config: rest, stale: previous };
+  if (previous && sameFile(previous, caCert)) return { config: { ...rest, caCertFile: previous } };
+  return { config: { ...rest, caCertFile: await saveCaFile(orgId, resourceId, caCert) }, stale: previous };
 }
 
 /** Which signing secrets a webhook service has (shown to admins; the values never are). */
@@ -623,14 +656,20 @@ export async function createResource(
     secret = serializeWebhookSecrets(secrets);
   }
   if (!secret) throw new AppError("VALIDATION_FAILED", { message: "Credentials are required." });
+  const _id = new Types.ObjectId();
+  const stored = await storeCa(env.orgId, _id, config as Record<string, unknown>);
+  const credentialsFile = FILE_KINDS.has(input.kind)
+    ? await saveSecretFile(env.orgId, _id, "credentials", secret)
+    : undefined;
   const resource = await ResourceModel.create({
+    _id,
     orgId: env.orgId,
     projectId: env.projectId,
     environmentId: envId,
     kind: input.kind,
     name: input.name,
-    config,
-    credentials: encryptSecret(masterKey(), secret),
+    config: stored.config,
+    ...(credentialsFile ? { credentialsFile } : { credentials: encryptSecret(masterKey(), secret) }),
     rotatedAt: new Date(),
   });
   if (opts.touch !== false) await touchEnvironment(envId);
@@ -660,7 +699,10 @@ export async function updateResource(
 ): Promise<ResourceDto> {
   const resource = await loadResource(actorId, resourceId, "admin");
   const kind = resource.kind as ResourceKind;
-  const current = (resource.config ?? {}) as Record<string, unknown>;
+  const previousCa = (resource.config as Record<string, unknown> | undefined)?.caCertFile as
+    | CaFileRef
+    | undefined;
+  const current = (await withCaCert(resource)).config as Record<string, unknown>;
   const { config: merged, secret: given } = configAndSecret(kind, input, current);
   let config = merged as Record<string, unknown>;
   let secret = given;
@@ -737,15 +779,26 @@ export async function updateResource(
     const result = await runDraftTest(kind, candidate, config);
     if (!result.ok) throw new AppError("SERVICE_TEST_FAILED", { message: result.message });
   }
-  const update: Record<string, unknown> = { config };
+  const stored = await storeCa(resource.orgId, resourceId, config, previousCa);
+  const update: Record<string, unknown> = { config: stored.config };
+  const stale: (FileRef | undefined)[] = [stored.stale];
   if (input.name) update.name = input.name;
-  if (secret)
+  if (secret && FILE_KINDS.has(kind)) {
+    const old = await ResourceModel.findById(resourceId).select("+credentialsFile").lean();
+    stale.push(old?.credentialsFile as FileRef | undefined);
+    Object.assign(update, {
+      credentialsFile: await saveSecretFile(resource.orgId, resourceId, "credentials", secret),
+      $unset: { credentials: 1 },
+      rotatedAt: new Date(),
+    });
+  } else if (secret)
     Object.assign(update, { credentials: encryptSecret(masterKey(), secret), rotatedAt: new Date() });
   if (input.disabled !== undefined) update.disabledAt = input.disabled ? new Date() : null;
   const updated = await ResourceModel.findByIdAndUpdate(resourceId, update, {
     returnDocument: "after",
   }).lean();
   if (!updated) throw new AppError("NOT_FOUND", { message: "Resource not found." });
+  await removeSecretFiles(stale);
   if (input.disabled === true)
     bus.publish({
       type: "access.revoked",
@@ -778,7 +831,12 @@ export async function deleteResource(actorId: string, resourceId: Types.ObjectId
   // Y5: nothing of the service stays behind — its devices' fake keys and the real Google tokens swapped for them.
   await FakeKeyModel.deleteMany({ resourceId });
   await TokenSwapModel.deleteMany({ resourceId });
+  const files = await ResourceModel.findById(resourceId).select("+credentialsFile").lean();
   await ResourceModel.deleteOne({ _id: resourceId });
+  await removeSecretFiles([
+    files?.credentialsFile as FileRef | undefined,
+    (files?.config as Record<string, unknown> | undefined)?.caCertFile as FileRef | undefined,
+  ]);
   await GrantModel.updateMany(
     { "resourceProfiles.resourceId": resourceId },
     { $pull: { resourceProfiles: { resourceId } } },

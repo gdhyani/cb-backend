@@ -14,6 +14,8 @@ describe("loadEnv", () => {
       DASHBOARD_URL: "http://localhost:4201",
       COOKIE_SECURE: false,
       ALLOW_PRIVATE_HTTP_UPSTREAMS: true,
+      FILE_STORE: "mongo",
+      SUPABASE_STORAGE_BUCKET: "cb-files",
     });
   });
 

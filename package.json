@@ -13,7 +13,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
-    "migrate:unified-variables": "node --env-file-if-exists=.env --import tsx scripts/migrate-unified-variables.ts"
+    "migrate:unified-variables": "node --env-file-if-exists=.env --import tsx scripts/migrate-unified-variables.ts",
+    "migrate:file-store": "node --env-file-if-exists=.env --import tsx scripts/migrate-file-store.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.2.1",

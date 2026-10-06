@@ -27,6 +27,17 @@ const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  /**
+   * Where uploaded files (service-account JSON, .p8 keys, CA certificates) are kept — always as cb ciphertext.
+   * `mongo` (default) keeps them in the backend's own database; `supabase` in a private Supabase Storage bucket.
+   */
+  FILE_STORE: z.enum(["mongo", "supabase"]).default("mongo"),
+  SUPABASE_URL: z.url().optional(),
+  SUPABASE_SECRET_KEY: z.string().min(10).optional(),
+  SUPABASE_STORAGE_BUCKET: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9._-]{2,62}$/, "lower-case letters, digits, . _ -")
+    .default("cb-files"),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -53,6 +64,11 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     throw new EnvError(issues);
   }
   const env = result.data;
+  if (env.FILE_STORE === "supabase") {
+    const missing = (["SUPABASE_URL", "SUPABASE_SECRET_KEY"] as const).filter((k) => !env[k]);
+    if (missing.length)
+      throw new EnvError(missing.map((key) => ({ key, message: "is required when FILE_STORE=supabase" })));
+  }
   if (env.NODE_ENV === "production" && env.UPSTREAM_EXTRA_CA_FILE) {
     throw new EnvError([
       { key: "UPSTREAM_EXTRA_CA_FILE", message: "is test-only and refused in production (S11)" },

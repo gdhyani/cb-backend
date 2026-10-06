@@ -20,6 +20,7 @@ import { requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { DEFAULT_PROFILE, readProfileSecret } from "./profile.service.js";
 import { readResourceSecret } from "./resource-secret.service.js";
+import { withCaCert } from "./secret-file.service.js";
 
 const TIMEOUT_MS = 8000;
 
@@ -459,7 +460,7 @@ export async function testResource(
   const draft = await runDraftTest(
     resource.kind as ResourceKind,
     secret,
-    (resource.config as Record<string, unknown>) ?? {},
+    ((await withCaCert(resource)).config as Record<string, unknown>) ?? {},
   );
   const result: ResourceTestDto = { ...draft, profile };
   await recordAudit({

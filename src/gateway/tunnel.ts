@@ -17,6 +17,7 @@ import { loadOrgCa } from "../services/org-ca.service.js";
 import { DEFAULT_PROFILE, readProfileSecret, resolveProfile } from "../services/profile.service.js";
 import { readResourceSecret } from "../services/resource-secret.service.js";
 import { eventConcerns, revalidate } from "../services/runtime-access.service.js";
+import { withCaCert } from "../services/secret-file.service.js";
 import { createApnsHandler } from "./http/apns-adapter.js";
 import { createAwsHandler } from "./http/aws-adapter.js";
 import { createGoogleSaHandler } from "./http/google-sa-adapter.js";
@@ -123,7 +124,7 @@ async function handleTunnel(
   }
   const hostPort = params.layer === "2" ? `${params.host.toLowerCase()}:${params.port}` : undefined;
   // Layer 2: every resource that claims this host; requests are routed among them (FR-GW-003).
-  const candidates =
+  const loaded =
     params.layer === "1"
       ? await ResourceModel.find({ _id: params.resource, environmentId: env._id, disabledAt: null }).lean()
       : await ResourceModel.find({
@@ -134,6 +135,8 @@ async function handleTunnel(
         })
           .sort({ createdAt: 1 })
           .lean();
+  // B10: a CA certificate kept in the file store comes back into config (memory only) for upstream TLS.
+  const candidates = await Promise.all(loaded.map((r) => withCaCert(r)));
   const resource = candidates[0];
   if (!resource) {
     ws.close(CloseCode.Forbidden, "no resource for this tunnel");
