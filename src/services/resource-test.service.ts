@@ -207,35 +207,63 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
   async aws(secret, config) {
     const keys = JSON.parse(secret) as { accessKeyId: string; secretAccessKey: string };
     const endpoint = new URL(String(config.endpoint));
-    const signer = new SignatureV4({
-      credentials: keys,
-      region: String(config.region ?? "us-east-1"),
-      service: "s3",
-      sha256: Hash.bind(null, "sha256"),
-    });
+    const region = String(config.region ?? "us-east-1");
+    const service = awsServiceOf(config);
+    // One harmless call per service, signed for that service: S3 ListBuckets, SES GetAccount, SQS ListQueues.
+    const probe =
+      service === "ses"
+        ? { method: "GET", path: "/v2/email/account", headers: {} as Record<string, string>, body: undefined }
+        : service === "sqs"
+          ? {
+              method: "POST",
+              path: "/",
+              headers: {
+                "content-type": "application/x-amz-json-1.0",
+                "x-amz-target": "AmazonSQS.ListQueues",
+              },
+              body: "{}",
+            }
+          : {
+              method: "GET",
+              path: "/",
+              headers: { "x-amz-content-sha256": "UNSIGNED-PAYLOAD" },
+              body: undefined,
+            };
+    const signer = new SignatureV4({ credentials: keys, region, service, sha256: Hash.bind(null, "sha256") });
     const signed = await signer.sign(
       new HttpRequest({
-        method: "GET",
+        method: probe.method,
         protocol: endpoint.protocol,
         hostname: endpoint.hostname,
         port: endpoint.port ? Number(endpoint.port) : undefined,
-        path: "/",
-        headers: { host: endpoint.host, "x-amz-content-sha256": "UNSIGNED-PAYLOAD" },
+        path: probe.path,
+        headers: { host: endpoint.host, ...probe.headers },
+        body: probe.body,
       }),
     );
-    const res = await request(`${endpoint.origin}/`, {
-      method: "GET",
+    const res = await request(`${endpoint.origin}${probe.path}`, {
+      method: probe.method as "GET",
       headers: signed.headers as Record<string, string>,
+      body: probe.body,
       dispatcher: upstreamDispatcher(),
     });
     const body = await res.body.text();
-    if (res.statusCode === 200) return { ok: true, message: "Signed request accepted (ListBuckets ok)" };
-    const code = /<Code>([^<]+)<\/Code>/.exec(body)?.[1];
-    // AccessDenied comes after AWS checked the key and signature: a key scoped to one bucket is a valid key.
-    if (res.statusCode === 403 && code === "AccessDenied")
+    const what = { s3: "ListBuckets", ses: "GetAccount", sqs: "ListQueues" }[service];
+    if (res.statusCode === 200) return { ok: true, message: `Signed request accepted (${what} ok)` };
+    // S3: XML <Code>; SQS: JSON __type; SES v2: the x-amzn-ErrorType header ("AccessDeniedException:http://…").
+    const headerType = String(res.headers["x-amzn-errortype"] ?? "").split(":")[0];
+    const code = (
+      /<Code>([^<]+)<\/Code>/.exec(body)?.[1] ??
+      /"__type"\s*:\s*"([^"]+)"/.exec(body)?.[1] ??
+      headerType
+    )
+      .split("#")
+      .pop();
+    // AccessDenied comes after AWS checked the key and signature: a key scoped to what the app needs is a valid key.
+    if (res.statusCode === 403 && (code === "AccessDenied" || code === "AccessDeniedException"))
       return {
         ok: true,
-        message: "Key accepted (signature valid); it can't list buckets, which is normal for a scoped key",
+        message: `Key accepted (signature valid); it can't ${{ s3: "list buckets", ses: "read the SES account", sqs: "list queues" }[service]}, which is normal for a scoped key`,
       };
     return { ok: false, message: `Request rejected (HTTP ${res.statusCode}${code ? ` ${code}` : ""})` };
   },
@@ -351,6 +379,24 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
     return { ok: true, message: "Signing secret saved; the first webhook from the provider confirms it." };
   },
 };
+
+/**
+ * Which AWS service an AWS service's endpoint speaks: email.<region>.amazonaws.com → SES, sqs.… → SQS, anything else
+ * (S3, R2, MinIO…) → S3. `awsService` (set by the dashboard's Service choice) wins.
+ */
+export function awsServiceOf(config: Record<string, unknown>): "s3" | "ses" | "sqs" {
+  const explicit = config.awsService;
+  if (explicit === "ses" || explicit === "sqs" || explicit === "s3") return explicit;
+  let host = "";
+  try {
+    host = new URL(String(config.endpoint)).hostname;
+  } catch {
+    return "s3";
+  }
+  if (/^email(-fips)?\.[a-z0-9-]+\.amazonaws\.com$/.test(host)) return "ses";
+  if (/^sqs(-fips)?\.[a-z0-9-]+\.amazonaws\.com$/.test(host)) return "sqs";
+  return "s3";
+}
 
 /** J2: test credentials that are not saved yet (Save & test, Replace value). No DB access, no audit. */
 export async function runDraftTest(

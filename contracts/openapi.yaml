@@ -1,6 +1,6 @@
 # cb API contract. Owned by cb-backend; consumers run `npm run sync:contract`.
 openapi: 3.1.0
-x-contract-version: 1.7.0
+x-contract-version: 1.8.0
 info:
   title: cb API
   version: 1.0.0
@@ -4925,6 +4925,10 @@ components:
           minLength: 8
           writeOnly: true
           description: Real secret access key.
+        awsService:
+          type: string
+          enum: [s3, ses, sqs]
+          description: Which AWS API the endpoint serves (Save & test signs a call of that kind). Read from the endpoint host when absent.
       required:
         - kind
         - name
@@ -5130,6 +5134,10 @@ components:
           maxProperties: 10
           additionalProperties: { type: string, maxLength: 500 }
           description: OQ9 — replaces the service's extra headers ({} removes them).
+        awsService:
+          type: string
+          enum: [s3, ses, sqs]
+          description: AWS services — which AWS API the endpoint serves.
         passOtherKeys:
           type: boolean
           description: API services — let other (public) keys through unchanged.

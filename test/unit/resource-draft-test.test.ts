@@ -108,3 +108,113 @@ describe("AWS Save & test: a scoped key that may not list buckets is still a val
     }
   });
 });
+
+describe("AWS Save & test checks each service with a call of its own kind (SES, SQS)", () => {
+  const aws = async (
+    handler: (
+      req: import("node:http").IncomingMessage,
+      body: string,
+    ) => { status: number; body: string; errorType?: string },
+  ) => {
+    const http = await import("node:http");
+    const seen: { method: string; url: string; target?: string; scope?: string }[] = [];
+    const srv = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => {
+        body += c;
+      });
+      req.on("end", () => {
+        const scope = /Credential=[^/]+\/\d+\/([^/]+)\/([^/]+)\//.exec(
+          String(req.headers.authorization ?? ""),
+        );
+        seen.push({
+          method: req.method ?? "",
+          url: req.url ?? "",
+          target: req.headers["x-amz-target"] as string,
+          scope: scope ? `${scope[1]}/${scope[2]}` : undefined,
+        });
+        const a = handler(req, body);
+        res.writeHead(a.status, {
+          "content-type": "application/json",
+          ...(a.errorType ? { "x-amzn-errortype": a.errorType } : {}),
+        });
+        res.end(a.body);
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    return { port: (srv.address() as AddressInfo).port, seen, close: () => srv.close() };
+  };
+  const secret = JSON.stringify({ accessKeyId: "AKIAEXAMPLE000000000", secretAccessKey: "x".repeat(40) });
+
+  it("SES: signs GetAccount for ses in the region; AccessDenied is a valid key, a bad token is not", async () => {
+    let answer: { status: number; body: string; errorType?: string } = { status: 200, body: "{}" };
+    const srv = await aws(() => answer);
+    // The service is read from the endpoint: email.<region>.amazonaws.com, here via awsService for the local stand-in.
+    const config = { region: "ap-southeast-1", endpoint: `http://127.0.0.1:${srv.port}`, awsService: "ses" };
+    expect((await runDraftTest("aws", secret, config)).ok).toBe(true);
+    expect(srv.seen.at(-1)).toMatchObject({
+      method: "GET",
+      url: "/v2/email/account",
+      scope: "ap-southeast-1/ses",
+    });
+    answer = {
+      status: 403,
+      body: JSON.stringify({ __type: "AccessDeniedException", message: "not authorized" }),
+    };
+    const denied = await runDraftTest("aws", secret, config);
+    expect(denied.ok).toBe(true);
+    expect(denied.message).toMatch(/key accepted/i);
+    // SES v2 (REST-JSON) puts the error type in a header and only a Message in the body — like the real API.
+    answer = {
+      status: 403,
+      body: JSON.stringify({ Message: "not authorized to perform: ses:GetAccount" }),
+      errorType: "AccessDeniedException:http://internal.amazon.com/coral/",
+    };
+    expect((await runDraftTest("aws", secret, config)).ok).toBe(true);
+    answer = {
+      status: 403,
+      body: JSON.stringify({ Message: "The security token included in the request is invalid." }),
+      errorType: "UnrecognizedClientException",
+    };
+    expect((await runDraftTest("aws", secret, config)).message).toContain("UnrecognizedClientException");
+    answer = {
+      status: 403,
+      body: JSON.stringify({
+        __type: "UnrecognizedClientException",
+        message: "The security token included in the request is invalid.",
+      }),
+    };
+    const bad = await runDraftTest("aws", secret, config);
+    expect(bad.ok).toBe(false);
+    expect(bad.message).toContain("UnrecognizedClientException");
+    srv.close();
+  });
+
+  it("SQS: signs ListQueues (JSON protocol) for sqs; InvalidClientTokenId fails", async () => {
+    let answer = { status: 200, body: JSON.stringify({ QueueUrls: [] }) };
+    const srv = await aws(() => answer);
+    const config = { region: "eu-west-1", endpoint: `http://127.0.0.1:${srv.port}`, awsService: "sqs" };
+    expect((await runDraftTest("aws", secret, config)).ok).toBe(true);
+    expect(srv.seen.at(-1)).toMatchObject({
+      method: "POST",
+      url: "/",
+      target: "AmazonSQS.ListQueues",
+      scope: "eu-west-1/sqs",
+    });
+    answer = {
+      status: 400,
+      body: JSON.stringify({ __type: "com.amazon.coral.service#InvalidClientTokenId", message: "bad" }),
+    };
+    expect((await runDraftTest("aws", secret, config)).ok).toBe(false);
+    srv.close();
+  });
+
+  it("the service is read from AWS endpoints: email. → ses, sqs. → sqs, anything else → s3", async () => {
+    const { awsServiceOf } = await import("../../src/services/resource-test.service.js");
+    expect(awsServiceOf({ endpoint: "https://email.ap-southeast-1.amazonaws.com" })).toBe("ses");
+    expect(awsServiceOf({ endpoint: "https://sqs.eu-west-1.amazonaws.com" })).toBe("sqs");
+    expect(awsServiceOf({ endpoint: "https://s3.us-east-1.amazonaws.com" })).toBe("s3");
+    expect(awsServiceOf({ endpoint: "https://abc.r2.cloudflarestorage.com" })).toBe("s3");
+    expect(awsServiceOf({ endpoint: "https://s3.us-east-1.amazonaws.com", awsService: "ses" })).toBe("ses");
+  });
+});
