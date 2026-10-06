@@ -5,7 +5,7 @@ import { assertRuntimeAccess } from "../services/access.service.js";
 import * as bootstrapService from "../services/bootstrap.service.js";
 import * as deliveryService from "../services/webhook-delivery.service.js";
 import { ingestWebhook } from "../services/webhook-ingress.service.js";
-import { connectStripeWebhook } from "../services/webhook-setup.service.js";
+import { ConnectBody, connectWebhook } from "../services/webhook-setup.service.js";
 import { toObjectId } from "../utils/ids.js";
 import { PaginationQuery } from "../utils/pagination.js";
 import { sendPaginated, sendSuccess } from "../utils/response.js";
@@ -102,14 +102,15 @@ export async function sendToMeHandler(req: Request, res: Response, next: NextFun
   }
 }
 
-/** Dashboard "Connect Stripe": cb creates the Stripe webhook endpoint with the stored key. */
+/** Dashboard "Connect Stripe" / "Connect Razorpay": cb creates the provider's webhook with the stored key. */
 export async function connectHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const body = ConnectBody.parse(req.body ?? {});
     sendSuccess(
       res,
-      await connectStripeWebhook(authOf(res).userId, toObjectId(req.params.resourceId, "Webhook")),
+      await connectWebhook(authOf(res).userId, toObjectId(req.params.resourceId, "Webhook"), body),
     );
   } catch (err) {
-    next(toAppError(err, "webhook.controller.connect: failed to connect the Stripe webhook"));
+    next(toAppError(err, "webhook.controller.connect: failed to connect the webhook"));
   }
 }

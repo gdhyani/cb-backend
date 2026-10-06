@@ -1,6 +1,6 @@
 # cb API contract. Owned by cb-backend; consumers run `npm run sync:contract`.
 openapi: 3.1.0
-x-contract-version: 1.5.0
+x-contract-version: 1.6.0
 info:
   title: cb API
   version: 1.0.0
@@ -544,14 +544,18 @@ paths:
           $ref: "#/components/responses/NotFound"
   /api/resources/{resourceId}/webhook/connect:
     post:
-      operationId: connectStripeWebhook
+      operationId: connectWebhook
       tags:
         - Webhooks
-      summary: Create (or point again) the Stripe webhook endpoint with the environment's stored Stripe key (admin)
+      summary: Create (or point again) the provider's webhook with the environment's stored API key (admin)
       description: >-
-        Uses the Stripe secret key stored in the same environment to create an all-events webhook endpoint at this
-        service's webhookUrl; the signing secret Stripe returns is stored and never shown. Connecting again updates
-        the endpoint's URL and keeps its secret.
+        Stripe: full events (an all-events v1 endpoint) and/or thin events (a v2 event destination with a named event
+        list), both at this service's webhookUrl; the signing secrets Stripe returns are stored and never shown; a
+        payload left out is removed in Stripe. Razorpay: one webhook (v1 webhooks API) with the usual payment, order
+        and refund events and the stored (or a new cb-made) secret. Connecting again updates the URL and keeps the
+        secrets. Config afterwards: connectedUrl, livemode, secretsSet, secretOrigin "connected", and
+        stripeEndpointId / stripeThinDestinationId / thinEvents / connectedPayloads or razorpayWebhookId /
+        razorpayEvents. Removing the service removes (Stripe) or switches off (Razorpay) the provider side.
       security:
         - sessionCookie: []
       parameters:
@@ -561,6 +565,22 @@ paths:
           schema:
             $ref: "#/components/schemas/ObjectId"
         - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                payloads:
+                  type: array
+                  minItems: 1
+                  maxItems: 2
+                  items:
+                    type: string
+                    enum: [full, thin]
+                  description: Stripe only — which payloads the app reads (full = constructEvent, thin = parseEventNotification). Default — what is connected now, else full.
       responses:
         "200":
           description: OK

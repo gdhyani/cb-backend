@@ -24,6 +24,8 @@ import { openEvents, waitFor } from "../helpers/sse.js";
 const STRIPE_KEY = "sk_test_REAL_STRIPE_KEY_6631";
 const SNAPSHOT_WHSEC = "whsec_REAL_SNAPSHOT_SECRET_1182";
 const THIN_WHSEC = "whsec_REAL_THIN_SECRET_7743";
+const RZP_KEY_ID = "rzp_test_Keyid12345";
+const RZP_KEY_SECRET = "REAL_RZP_KEY_SECRET_5520";
 
 let backendDb: Awaited<ReturnType<typeof startMemoryMongo>>;
 let payments: Awaited<ReturnType<typeof startMockPayments>>;
@@ -34,7 +36,7 @@ let base: string;
 beforeAll(async () => {
   [backendDb, payments] = await Promise.all([
     startMemoryMongo(),
-    startMockPayments({ stripeKey: STRIPE_KEY, razorpayKeyId: "rzp_test_Keyid12345", razorpaySecret: "x" }),
+    startMockPayments({ stripeKey: STRIPE_KEY, razorpayKeyId: RZP_KEY_ID, razorpaySecret: RZP_KEY_SECRET }),
   ]);
   setEnv(
     loadEnv({
@@ -66,7 +68,7 @@ beforeEach(async () => {
   ]);
 });
 
-async function project(opts: { stripeKey?: boolean } = {}) {
+async function project(opts: { stripeKey?: boolean; razorpayKey?: string } = {}) {
   const { owner, orgId } = await signupOwner(app);
   const p = await owner.post(`/api/orgs/${orgId}/projects`, { name: "Shop" });
   const projectId = p.body.data.id as string;
@@ -82,6 +84,21 @@ async function project(opts: { stripeKey?: boolean } = {}) {
     });
     expect(s.status, JSON.stringify(s.body)).toBe(201);
     stripeApiId = s.body.data.service.id;
+  }
+  if (opts.razorpayKey) {
+    const r = await owner.post(services, {
+      key: "RAZORPAY_KEY_SECRET",
+      preset: "razorpay",
+      test: false,
+      resource: {
+        kind: "http",
+        apiKey: opts.razorpayKey,
+        basicUser: RZP_KEY_ID,
+        upstreamUrl: payments.url,
+        redirectHosts: [],
+      },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
   }
   const device = async (name: string) => {
     const m = await addMember(app, owner, orgId, name);
@@ -538,5 +555,230 @@ describe("FR-WH-001 where a Razorpay secret came from", () => {
     expect(regen.body.data.config.secretOrigin).toBe("generated");
     const typed = await owner.patch(`/api/resources/${id}`, { signingSecret: "another-own-secret" });
     expect(typed.body.data.config.secretOrigin).toBe("typed");
+  });
+});
+
+const rzpPost = (serviceId: string, secret: string, eventId: string) => {
+  const body = JSON.stringify({
+    event: "payment.captured",
+    payload: { payment: { entity: { id: "pay_Abcdefgh9" } } },
+  });
+  return fetch(`${base}/api/hooks/${serviceId}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-razorpay-signature": createHmac("sha256", secret).update(body).digest("hex"),
+      "x-razorpay-event-id": eventId,
+    },
+    body,
+  });
+};
+
+describe("FR-WH-001 Connect Razorpay: cb creates the webhook with the stored Razorpay key", () => {
+  const addHook = async (
+    owner: Awaited<ReturnType<typeof project>>["owner"],
+    services: string,
+    signingSecret?: string,
+  ) => {
+    const r = await owner.post(services, {
+      key: "RAZORPAY_WEBHOOK_SECRET",
+      resource: {
+        kind: "webhook",
+        provider: "razorpay",
+        path: "/api/webhooks/razorpay",
+        ...(signingSecret ? { signingSecret } : {}),
+      },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    return r.body.data.service as { id: string; generatedSecret?: string };
+  };
+
+  it("creates one webhook with the usual events and the stored secret; Razorpay's signed events are accepted", async () => {
+    const { owner, services } = await project({ stripeKey: false, razorpayKey: RZP_KEY_SECRET });
+    const svc = await addHook(owner, services);
+    const c = await owner.post(`/api/resources/${svc.id}/webhook/connect`, {});
+    expect(c.status, JSON.stringify(c.body)).toBe(200);
+    const cfg = c.body.data.config;
+    expect(cfg).toMatchObject({
+      razorpayWebhookId: expect.stringMatching(/^Tk/),
+      connectedUrl: `https://hooks.cb.test/api/hooks/${svc.id}`,
+      secretOrigin: "connected",
+      livemode: false,
+      secretsSet: { snapshot: true, thin: false },
+    });
+    expect(cfg.razorpayEvents).toEqual([
+      "payment.authorized",
+      "payment.captured",
+      "payment.failed",
+      "order.paid",
+      "refund.created",
+      "refund.processed",
+      "refund.failed",
+    ]);
+    const hook = payments.rzpHooks.get(cfg.razorpayWebhookId);
+    expect(hook?.url).toBe(`https://hooks.cb.test/api/hooks/${svc.id}`);
+    expect(Object.values(hook?.events ?? {}).every(Boolean)).toBe(true);
+    // The secret given to Razorpay is the one cb made at create; never in the connect answer.
+    expect(hook?.secret).toBe(svc.generatedSecret);
+    expect(JSON.stringify(c.body)).not.toContain(hook?.secret);
+    expect((await rzpPost(svc.id, hook?.secret ?? "", "e1")).status).toBe(200);
+    expect((await rzpPost(svc.id, "wrong-secret-123", "e2")).status).toBe(400);
+  });
+
+  it("a secret the admin typed is the one Razorpay gets (no new secret, nothing to re-paste)", async () => {
+    const { owner, services } = await project({ stripeKey: false, razorpayKey: RZP_KEY_SECRET });
+    const svc = await addHook(owner, services, "typed-by-admin-123");
+    const c = await owner.post(`/api/resources/${svc.id}/webhook/connect`, {});
+    expect(payments.rzpHooks.get(c.body.data.config.razorpayWebhookId)?.secret).toBe("typed-by-admin-123");
+  });
+
+  it("reconnect updates the same webhook; one deleted in Razorpay is created again", async () => {
+    const { owner, services } = await project({ stripeKey: false, razorpayKey: RZP_KEY_SECRET });
+    const svc = await addHook(owner, services);
+    const first = await owner.post(`/api/resources/${svc.id}/webhook/connect`, {});
+    const id = first.body.data.config.razorpayWebhookId as string;
+    const before = payments.rzpHooks.size;
+    const again = await owner.post(`/api/resources/${svc.id}/webhook/connect`, {});
+    expect(again.body.data.config.razorpayWebhookId).toBe(id);
+    expect(payments.rzpHooks.size).toBe(before);
+    payments.rzpHooks.delete(id);
+    const recreated = await owner.post(`/api/resources/${svc.id}/webhook/connect`, {});
+    expect(recreated.status, JSON.stringify(recreated.body)).toBe(200);
+    expect(recreated.body.data.config.razorpayWebhookId).not.toBe(id);
+    expect(payments.rzpHooks.get(recreated.body.data.config.razorpayWebhookId)?.secret).toBe(
+      svc.generatedSecret,
+    );
+  });
+
+  it("wrong input: without a Razorpay key in the environment, connect says what to add", async () => {
+    const none = await project({ stripeKey: false });
+    const a = await addHook(none.owner, none.services);
+    const noKey = await none.owner.post(`/api/resources/${a.id}/webhook/connect`, {});
+    expect(noKey.status).toBe(400);
+    expect(noKey.body.error.message).toMatch(/Add your Razorpay key/);
+  });
+
+  it("wrong input: a key Razorpay refuses gives Razorpay's reason, and nothing is saved", async () => {
+    const bad = await project({ stripeKey: false, razorpayKey: "not-the-real-secret" });
+    const b = await addHook(bad.owner, bad.services);
+    const refusedKey = await bad.owner.post(`/api/resources/${b.id}/webhook/connect`, {});
+    expect(refusedKey.status).toBe(422);
+    expect(refusedKey.body.error.message).toMatch(
+      /Razorpay did not create the webhook: The api key provided is invalid/,
+    );
+    const list = await bad.owner.get(`/api/environments/${bad.envId}/resources`);
+    expect(
+      list.body.data.find((r: { id: string }) => r.id === b.id).config.razorpayWebhookId,
+    ).toBeUndefined();
+  });
+
+  it("wrong input: Stripe-only options and unknown fields are refused; developers cannot connect", async () => {
+    const ok = await project({ stripeKey: false, razorpayKey: RZP_KEY_SECRET });
+    const c = await addHook(ok.owner, ok.services);
+    expect(
+      (await ok.owner.post(`/api/resources/${c.id}/webhook/connect`, { payloads: ["thin"] })).status,
+    ).toBe(400);
+    expect((await ok.owner.post(`/api/resources/${c.id}/webhook/connect`, { bogus: true })).status).toBe(400);
+    const dev = await ok.device("Dana");
+    expect((await dev.member.post(`/api/resources/${c.id}/webhook/connect`, {})).status).toBe(403);
+  });
+
+  it("after connecting, New secret is refused (it would break Razorpay); removing the key switches Razorpay's webhook off", async () => {
+    const { owner, services } = await project({ stripeKey: false, razorpayKey: RZP_KEY_SECRET });
+    const svc = await addHook(owner, services);
+    const c = await owner.post(`/api/resources/${svc.id}/webhook/connect`, {});
+    const regen = await owner.patch(`/api/resources/${svc.id}`, { regenerateSecret: true });
+    expect(regen.status).toBe(400);
+    expect(regen.body.error.message).toMatch(/Reconnect/);
+    expect((await owner.delete(`/api/resources/${svc.id}`)).status).toBeLessThan(300);
+    const hook = payments.rzpHooks.get(c.body.data.config.razorpayWebhookId);
+    expect(hook?.active).toBe(false);
+    expect(Object.values(hook?.events ?? {}).some(Boolean)).toBe(false);
+  });
+});
+
+describe("FR-WH-001 Connect Stripe: full events, thin events or both, on one URL", () => {
+  const addHook = async (owner: Awaited<ReturnType<typeof project>>["owner"], services: string) => {
+    const r = await owner.post(services, {
+      key: "STRIPE_WEBHOOK_SECRET",
+      resource: { kind: "webhook", provider: "stripe", path: "/api/webhooks/stripe" },
+    });
+    return r.body.data.service.id as string;
+  };
+  const thinEvent = (id: string) => ({
+    id,
+    object: "v2.core.event",
+    type: "v1.payment_intent.succeeded",
+    related_object: { id: "pi_Abcdefgh5", type: "payment_intent" },
+  });
+
+  it("thin only: a thin destination with the named event list; its events verify with the secret Stripe returned", async () => {
+    const { owner, services } = await project();
+    const id = await addHook(owner, services);
+    const c = await owner.post(`/api/resources/${id}/webhook/connect`, { payloads: ["thin"] });
+    expect(c.status, JSON.stringify(c.body)).toBe(200);
+    const cfg = c.body.data.config;
+    expect(cfg).toMatchObject({
+      connectedPayloads: ["thin"],
+      secretsSet: { snapshot: false, thin: true },
+      livemode: false,
+    });
+    expect(cfg.stripeEndpointId).toBeUndefined();
+    expect(cfg.thinEvents).toHaveLength(12);
+    const dest = payments.destinations.get(cfg.stripeThinDestinationId);
+    expect(dest).toMatchObject({ url: `https://hooks.cb.test/api/hooks/${id}`, payload: "thin" });
+    expect(dest?.events).toEqual(cfg.thinEvents);
+    expect((await postStripe(id, thinEvent("evt_t1"), dest?.secret ?? "")).status).toBe(200);
+  });
+
+  it("both: one URL, two destinations, both secrets kept; switching to full only removes the thin destination in Stripe", async () => {
+    const { owner, services } = await project();
+    const id = await addHook(owner, services);
+    const both = await owner.post(`/api/resources/${id}/webhook/connect`, { payloads: ["full", "thin"] });
+    const cfg = both.body.data.config;
+    expect(cfg.secretsSet).toEqual({ snapshot: true, thin: true });
+    const endpoint = payments.endpoints.get(cfg.stripeEndpointId);
+    const dest = payments.destinations.get(cfg.stripeThinDestinationId);
+    expect(endpoint?.url).toBe(dest?.url);
+    expect(endpoint?.events).toEqual(["*"]);
+    const full = {
+      id: "evt_f1",
+      object: "event",
+      type: "payment_intent.succeeded",
+      data: { object: { id: "pi_Abcdefgh6" } },
+    };
+    expect((await postStripe(id, full, endpoint?.secret ?? "")).status).toBe(200);
+    expect((await postStripe(id, thinEvent("evt_t2"), dest?.secret ?? "")).status).toBe(200);
+
+    const fullOnly = await owner.post(`/api/resources/${id}/webhook/connect`, { payloads: ["full"] });
+    expect(fullOnly.body.data.config.secretsSet).toEqual({ snapshot: true, thin: false });
+    expect(fullOnly.body.data.config.stripeThinDestinationId).toBeUndefined();
+    expect(payments.destinations.has(cfg.stripeThinDestinationId)).toBe(false);
+    expect(fullOnly.body.data.config.stripeEndpointId).toBe(cfg.stripeEndpointId);
+  });
+
+  it("reconnect keeps the chosen payloads; a thin destination deleted in Stripe is created again", async () => {
+    const { owner, services } = await project();
+    const id = await addHook(owner, services);
+    const first = await owner.post(`/api/resources/${id}/webhook/connect`, { payloads: ["full", "thin"] });
+    payments.destinations.delete(first.body.data.config.stripeThinDestinationId);
+    const again = await owner.post(`/api/resources/${id}/webhook/connect`, {});
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(again.body.data.config.connectedPayloads).toEqual(["full", "thin"]);
+    expect(again.body.data.config.stripeThinDestinationId).not.toBe(
+      first.body.data.config.stripeThinDestinationId,
+    );
+    expect(again.body.data.config.stripeEndpointId).toBe(first.body.data.config.stripeEndpointId);
+  });
+
+  it("wrong payloads are refused; removing the key deletes both in Stripe", async () => {
+    const { owner, services } = await project();
+    const id = await addHook(owner, services);
+    for (const payloads of [[], ["bogus"], ["full", "thin", "full"]])
+      expect((await owner.post(`/api/resources/${id}/webhook/connect`, { payloads })).status).toBe(400);
+    const c = await owner.post(`/api/resources/${id}/webhook/connect`, { payloads: ["full", "thin"] });
+    expect((await owner.delete(`/api/resources/${id}`)).status).toBeLessThan(300);
+    expect(payments.endpoints.has(c.body.data.config.stripeEndpointId)).toBe(false);
+    expect(payments.destinations.has(c.body.data.config.stripeThinDestinationId)).toBe(false);
   });
 });
