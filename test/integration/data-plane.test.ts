@@ -1,6 +1,6 @@
 import type http from "node:http";
 import { request as httpRequest } from "node:http";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import tls from "node:tls";
 import { Redis } from "ioredis";
 import { MongoClient } from "mongodb";
@@ -560,6 +560,57 @@ describe("revocation (J7, FR-GW-007, S4)", () => {
     await sweepExpiredGrants();
     // The pooled keep-alive socket was closed by the revocation; ask again on a fresh connection.
     const denied = await freshGet(listener.port, "/v1/x", key);
+    expect(denied.status).toBe(403);
+    expect(JSON.parse(denied.body)).toEqual({ error: "cb_access_revoked" });
+    listener.close();
+  });
+
+  it("S4 revoking the grant cuts an open AWS tunnel within 5 s; new requests get 403 cb_access_revoked", async () => {
+    const { token, envId, owner, grantId, app } = await scenario();
+    const s3 = await owner.post(`/api/environments/${envId}/resources`, {
+      kind: "aws",
+      name: "s3",
+      region: "us-east-1",
+      endpoint: provider.url,
+      accessKeyId: "AKIAREALREVOKE000001",
+      secretAccessKey: "REAL_REVOKE_AWS_SECRET_000000000001",
+    });
+    const id = s3.body.data.id as string;
+    for (const [key, field] of [
+      ["AWS_ACCESS_KEY_ID", "accessKeyId"],
+      ["AWS_SECRET_ACCESS_KEY", "secretAccessKey"],
+    ])
+      await owner.post(`/api/environments/${envId}/variables`, {
+        type: "brokered",
+        key,
+        resourceId: id,
+        field,
+      });
+    const projectId = (await owner.get(`/api/environments/${envId}`)).body.data.projectId;
+    const boot = await cli(app as never, token).get(
+      `/api/agent/bootstrap?projectId=${projectId}&env=development`,
+    );
+    const listener = await localListener(base, token, { layer: "1", env: envId, resource: id });
+    const signed = (k: string) =>
+      `AWS4-HMAC-SHA256 Credential=${k}/20260101/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=00`;
+    // A keep-alive socket held open by the app, like an SDK's pool.
+    const sock = net.connect(listener.port, "127.0.0.1");
+    await new Promise((r) => sock.once("connect", r));
+    const closed = new Promise<number>((r) => sock.once("close", () => r(Date.now())));
+    sock.write(
+      `GET /b/cb.png HTTP/1.1\r\nhost: x\r\nauthorization: ${signed(boot.body.data.plain.AWS_ACCESS_KEY_ID)}\r\n\r\n`,
+    );
+    await new Promise((r) => sock.once("data", r));
+    let early = false;
+    void closed.then(() => {
+      early = true;
+    });
+    await new Promise((r) => setTimeout(r, 500));
+    expect(early, "the keep-alive socket must still be open before the revocation").toBe(false);
+    const revokedAt = Date.now();
+    expect((await owner.delete(`/api/grants/${grantId}`)).status).toBe(200);
+    expect((await closed) - revokedAt).toBeLessThan(5_000);
+    const denied = await freshGet(listener.port, "/b/cb.png", "x");
     expect(denied.status).toBe(403);
     expect(JSON.parse(denied.body)).toEqual({ error: "cb_access_revoked" });
     listener.close();
