@@ -540,4 +540,3 @@ describe("FR-WH-001 where a Razorpay secret came from", () => {
     expect(typed.body.data.config.secretOrigin).toBe("typed");
   });
 });
-
