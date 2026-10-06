@@ -30,7 +30,9 @@ beforeAll(async () => {
   setEnv(loadEnv({ ...testEnvVars(backendDb.uri), UPSTREAM_EXTRA_CA_FILE: provider.caFile }));
   resetUpstreamDispatcher();
   await connectMongo(backendDb.uri);
-  // S9: everything the backend logs during these flows, at debug level.
+  // S9: everything the backend logs during these flows, at debug level (the test logger is silent by default).
+  logger.clear();
+  logger.silent = false;
   logger.add(
     new transports.Stream({
       stream: new Writable({
