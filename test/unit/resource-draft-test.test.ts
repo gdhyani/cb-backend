@@ -111,7 +111,10 @@ describe("AWS Save & test: a scoped key that may not list buckets is still a val
 
 describe("AWS Save & test checks each service with a call of its own kind (SES, SQS)", () => {
   const aws = async (
-    handler: (req: import("node:http").IncomingMessage, body: string) => { status: number; body: string; errorType?: string },
+    handler: (
+      req: import("node:http").IncomingMessage,
+      body: string,
+    ) => { status: number; body: string; errorType?: string },
   ) => {
     const http = await import("node:http");
     const seen: { method: string; url: string; target?: string; scope?: string }[] = [];
