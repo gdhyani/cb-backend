@@ -357,7 +357,7 @@ describe("tunnels through real services (T4, FR-GW-001, FR-GW-002)", () => {
   });
 
   it("FR-GW-001 rejects bad tokens (4401) and foreign resources (4403)", async () => {
-    const { envId, resources } = await scenario();
+    const { envId, resources, token } = await scenario();
     const attempt = (token: string, resource: string) =>
       new Promise<number>((resolve) => {
         const url = new URL("/tunnel", base);
@@ -368,6 +368,17 @@ describe("tunnels through real services (T4, FR-GW-001, FR-GW-002)", () => {
         );
       });
     expect(await attempt("cbd_nope", resources.cache)).toBe(4401);
+    // A service in another org: the token is valid, the resource is not this device's to open.
+    const app = server.listeners("request")[0] as never;
+    const otherOrg = await signupOwner(app, "-other");
+    const otherProject = await otherOrg.owner.post(`/api/orgs/${otherOrg.orgId}/projects`, { name: "Other" });
+    const otherEnv = otherProject.body.data.environments[0].id as string;
+    const foreign = await otherOrg.owner.post(`/api/environments/${otherEnv}/resources`, {
+      kind: "redis",
+      name: "cache",
+      connectionUri: redis.uri,
+    });
+    expect(await attempt(token, foreign.body.data.id)).toBe(4403);
   });
 });
 
