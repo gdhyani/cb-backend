@@ -6,8 +6,10 @@ import { encryptSecret } from "../crypto/envelope.js";
 import { AppError } from "../errors/app-error.js";
 import { bus } from "../events/bus.js";
 import { CredentialProfileModel } from "../models/credential-profile.model.js";
+import { FakeKeyModel } from "../models/fake-key.model.js";
 import { GrantModel } from "../models/grant.model.js";
 import { type ResourceKind, ResourceModel } from "../models/resource.model.js";
+import { TokenSwapModel } from "../models/token-swap.model.js";
 import { VariableModel } from "../models/variable.model.js";
 import {
   type MongoTarget,
@@ -744,6 +746,9 @@ export async function deleteResource(actorId: string, resourceId: Types.ObjectId
   }
   await VariableModel.deleteMany({ resourceId });
   await CredentialProfileModel.deleteMany({ resourceId });
+  // Y5: nothing of the service stays behind — its devices' fake keys and the real Google tokens swapped for them.
+  await FakeKeyModel.deleteMany({ resourceId });
+  await TokenSwapModel.deleteMany({ resourceId });
   await ResourceModel.deleteOne({ _id: resourceId });
   await GrantModel.updateMany(
     { "resourceProfiles.resourceId": resourceId },
