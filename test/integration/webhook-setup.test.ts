@@ -170,6 +170,7 @@ describe("FR-WH-001 Connect Stripe: cb creates the endpoint with the stored key;
       const c = await owner.post(`/api/resources/${r.body.data.service.id}/webhook/connect`, {});
       expect(c.status, JSON.stringify(c.body)).toBe(200);
     } finally {
+      payments.endpoints.clear(); // the shared mock Stripe starts the next test empty
       setEnv(
         loadEnv({
           ...testEnvVars(backendDb.uri),
