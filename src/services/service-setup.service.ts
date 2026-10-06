@@ -86,7 +86,9 @@ export async function createService(
       throw invalid("extras", `${kind} services provide: ${BROKERED_FIELDS[kind].join(", ")}`);
 
   let test: ServiceCreatedDto["test"] = null;
-  if (input.test) {
+  // A webhook without a secret yet (Stripe Connect, Razorpay generated) has nothing to test.
+  const pendingWebhook = kind === "webhook" && !configAndSecret(kind, parsed).secret;
+  if (input.test && !pendingWebhook) {
     const { config, secret } = configAndSecret(kind, parsed);
     if (!secret) throw invalid("resource", "Credentials are required.");
     test = { ...(await runDraftTest(kind, secret, config)), profile: DEFAULT_PROFILE };

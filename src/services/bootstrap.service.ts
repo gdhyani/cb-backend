@@ -16,6 +16,7 @@ import {
   fakeDbCredentials,
   fakeGoogleKey,
   fakeRedisCredentials,
+  thinFakeResource,
 } from "./fakes.service.js";
 import { ensureOrgCa } from "./org-ca.service.js";
 import { generatedValue } from "./variable.service.js";
@@ -218,9 +219,13 @@ export async function buildBootstrap(
               resourceId: r._id.toHexString(),
             });
           }
-        } else if (r.kind === "webhook" && v.field === "secret") {
+        } else if (r.kind === "webhook" && (v.field === "secret" || v.field === "thinSecret")) {
           // FR-WH-001: the app verifies webhooks with this per-device fake; cb re-signs each delivery with it.
-          plain[v.key] = fakeApiKey(scope, String(config.fakePrefix ?? ""));
+          const thinScope = {
+            ...scope,
+            resourceId: thinFakeResource(scope.resourceId, v.field === "thinSecret"),
+          };
+          plain[v.key] = fakeApiKey(thinScope, String(config.fakePrefix ?? ""));
         } else if (r.kind === "http" && v.field === "key") {
           plain[v.key] = fakeApiKey(scope, config.fakePrefix ?? "cb_");
           for (const hp of config.redirectHosts ?? []) {

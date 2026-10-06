@@ -10,6 +10,8 @@ const WebhookEventSchema = new Schema(
     provider: { type: String, required: true },
     eventId: { type: String, required: true },
     type: { type: String, default: "" },
+    /** Stripe thin payload (v2.core.event): may go to its own path and be signed with its own key's fake. */
+    thin: { type: Boolean, default: false },
     /** Provider headers the app may use (event id), never signatures. */
     passHeaders: { type: Schema.Types.Mixed, default: {} },
     body: { type: EncryptedSecretSchema, select: false, default: null },

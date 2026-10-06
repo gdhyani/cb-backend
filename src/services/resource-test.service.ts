@@ -15,6 +15,7 @@ import { type AuthScheme, injectCredential } from "../gateway/http/http-adapter.
 import { upstreamCa, upstreamDispatcher } from "../gateway/http/upstream.js";
 import { type ResourceKind, ResourceModel } from "../models/resource.model.js";
 import { MYSQL_TLS_HINT, mysqlWantsTls, parseMongoUri } from "../utils/connection-uri.js";
+import { parseWebhookSecrets } from "../webhooks/secrets.js";
 import { requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { DEFAULT_PROFILE, readProfileSecret } from "./profile.service.js";
@@ -333,9 +334,14 @@ const testers: Record<ResourceKind, (secret: string, config: Record<string, unkn
    * the first real webhook proves it (a mismatch shows as a rejected delivery in the dashboard).
    */
   async webhook(secret, config) {
-    if (config.provider === "stripe" && !secret.startsWith("whsec_"))
+    const secrets = parseWebhookSecrets(secret);
+    const given = [secrets.snapshot, secrets.thin].filter((v): v is string => Boolean(v));
+    if (given.length === 0)
+      return { ok: true, message: "Saved; add the signing secret to start receiving webhooks." };
+    if (config.provider === "stripe" && given.some((v) => !v.startsWith("whsec_")))
       return { ok: false, message: "A Stripe signing secret starts with whsec_." };
-    if (secret.trim().length < 8) return { ok: false, message: "The signing secret is too short." };
+    if (given.some((v) => v.trim().length < 8))
+      return { ok: false, message: "The signing secret is too short." };
     return { ok: true, message: "Signing secret saved; the first webhook from the provider confirms it." };
   },
 };

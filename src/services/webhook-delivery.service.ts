@@ -6,15 +6,17 @@ import { AppError } from "../errors/app-error.js";
 import { bus } from "../events/bus.js";
 import { logger } from "../logger/logger.js";
 import { DeviceModel } from "../models/device.model.js";
+import { EnvironmentModel } from "../models/environment.model.js";
 import { ResourceModel } from "../models/resource.model.js";
 import { UserModel } from "../models/user.model.js";
+import { VariableModel } from "../models/variable.model.js";
 import { WebhookDeliveryModel } from "../models/webhook-delivery.model.js";
 import { WebhookEventModel } from "../models/webhook-event.model.js";
 import { WebhookListenerModel } from "../models/webhook-listener.model.js";
 import type { Pagination } from "../utils/response.js";
 import { signWebhook, type WebhookProvider } from "../webhooks/signing.js";
-import { loadEnvironment, requireMembership } from "./access.service.js";
-import { fakeApiKey } from "./fakes.service.js";
+import { assertRuntimeAccess, loadEnvironment, requireMembership } from "./access.service.js";
+import { fakeApiKey, thinFakeResource } from "./fakes.service.js";
 import type { RuntimeSubject } from "./runtime-access.service.js";
 import { revalidate } from "./runtime-access.service.js";
 import { claimObjects, ownersOf } from "./webhook-owner.service.js";
@@ -173,16 +175,20 @@ export async function renderPush(
   const config = (resource.config ?? {}) as {
     provider?: WebhookProvider;
     path?: string;
+    thinPath?: string;
     port?: number;
     fakePrefix?: string;
   };
   const provider = config.provider ?? (event.provider as WebhookProvider);
   const body = Buffer.from(decryptSecret(masterKey(), event.body), "base64");
+  // Thin events are signed with the thin key's fake when the app reads one; otherwise with the main key's.
+  const thinKey =
+    event.thin && (await VariableModel.exists({ resourceId: resource._id, field: "thinSecret" }));
   const fake = fakeApiKey(
     {
       deviceId: subject.deviceId,
       environmentId: subject.environmentId,
-      resourceId: resource._id.toHexString(),
+      resourceId: thinFakeResource(resource._id.toHexString(), Boolean(thinKey)),
     },
     config.fakePrefix ?? "",
   );
@@ -197,7 +203,7 @@ export async function renderPush(
     eventId: event.eventId,
     provider,
     type: event.type,
-    path: config.path ?? "/",
+    path: (event.thin && config.thinPath) || config.path || "/",
     port: config.port ?? null,
     headers: {
       "content-type": "application/json",
@@ -500,4 +506,56 @@ export async function replayWebhookEvent(
   for (const d of existing) if (d.status !== "expired") announce(d);
   logger.info(`webhooks: event ${event.eventId} replayed to ${existing.length} device(s)`);
   return { queued: existing.filter((d) => d.status !== "expired").length };
+}
+
+/**
+ * Dashboard "Send to me": an event nobody owns (a dashboard test event, `stripe trigger`) goes to the caller's own
+ * signed-in machines; a delivery that already exists is sent once more. Never to anyone else.
+ */
+export async function sendWebhookToMe(
+  actorId: string,
+  eventRef: Types.ObjectId,
+): Promise<{ queued: number }> {
+  const event = await WebhookEventModel.findById(eventRef).select("+body").lean();
+  if (!event) throw new AppError("NOT_FOUND", { message: "Webhook event not found." });
+  await requireMembership(actorId, event.orgId, "admin");
+  if (!event.body || event.expiresAt <= new Date())
+    throw new AppError("NOT_FOUND", {
+      message: "This event is older than 24 hours and can no longer be sent.",
+    });
+  const env = await EnvironmentModel.findById(event.environmentId).lean();
+  if (!env) throw new AppError("NOT_FOUND", { message: "Environment not found." });
+  // Only someone who may run this environment gets its events (grant, kill switch, suspension).
+  await assertRuntimeAccess(actorId, env);
+  const devices = await DeviceModel.find({ userId: actorId, revokedAt: null }).select("_id userId").lean();
+  if (devices.length === 0)
+    throw new AppError("VALIDATION_FAILED", {
+      message: "Sign in on your machine with cb login and run your app with cb run, then send it again.",
+    });
+  // Every row of these devices, expired ones too (the unique index would make a new insert a no-op).
+  const existing = await WebhookDeliveryModel.find({
+    eventRef,
+    deviceId: { $in: devices.map((d) => d._id) },
+  }).lean();
+  const has = new Set(existing.map((d) => d.deviceId.toHexString()));
+  const fresh = devices
+    .filter((d) => !has.has(d._id.toHexString()))
+    .map((d) => ({ deviceId: d._id, userId: d.userId }));
+  const created = await enqueueDeliveries(event, fresh);
+  const again = existing;
+  if (again.length > 0) {
+    await WebhookDeliveryModel.updateMany(
+      { _id: { $in: again.map((d) => d._id) } },
+      {
+        $set: { status: "pending", nextAttemptAt: new Date(), lastError: null, expiresAt: event.expiresAt },
+        $inc: { generation: 1 },
+      },
+    );
+    for (const d of again) announce(d);
+  }
+  if (created + again.length === 0)
+    throw new AppError("VALIDATION_FAILED", {
+      message: "No machine of yours could receive it. Sign in with cb login.",
+    });
+  return { queued: created + again.length };
 }

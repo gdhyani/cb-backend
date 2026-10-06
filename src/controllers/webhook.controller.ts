@@ -5,6 +5,7 @@ import { assertRuntimeAccess } from "../services/access.service.js";
 import * as bootstrapService from "../services/bootstrap.service.js";
 import * as deliveryService from "../services/webhook-delivery.service.js";
 import { ingestWebhook } from "../services/webhook-ingress.service.js";
+import { connectStripeWebhook } from "../services/webhook-setup.service.js";
 import { toObjectId } from "../utils/ids.js";
 import { PaginationQuery } from "../utils/pagination.js";
 import { sendPaginated, sendSuccess } from "../utils/response.js";
@@ -83,5 +84,32 @@ export async function replayHandler(req: Request, res: Response, next: NextFunct
     );
   } catch (err) {
     next(toAppError(err, "webhook.controller.replay: failed to replay the webhook event"));
+  }
+}
+
+/** Dashboard "Send to me" for an event nobody owns. */
+export async function sendToMeHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    sendSuccess(
+      res,
+      await deliveryService.sendWebhookToMe(
+        authOf(res).userId,
+        toObjectId(req.params.eventId, "Webhook event"),
+      ),
+    );
+  } catch (err) {
+    next(toAppError(err, "webhook.controller.sendToMe: failed to send the webhook event"));
+  }
+}
+
+/** Dashboard "Connect Stripe": cb creates the Stripe webhook endpoint with the stored key. */
+export async function connectHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    sendSuccess(
+      res,
+      await connectStripeWebhook(authOf(res).userId, toObjectId(req.params.resourceId, "Webhook")),
+    );
+  } catch (err) {
+    next(toAppError(err, "webhook.controller.connect: failed to connect the Stripe webhook"));
   }
 }
