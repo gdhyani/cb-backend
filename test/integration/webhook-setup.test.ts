@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import fs from "node:fs";
 import type http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Express } from "express";
@@ -140,6 +141,44 @@ describe("FR-WH-001 Connect Stripe: cb creates the endpoint with the stored key;
       "whsec_any",
     );
     expect(hook.status).toBe(400);
+  });
+
+  it("I3 connect uses the Stripe key's own CA certificate, also after it moved to the file store", async () => {
+    // No global test CA: the mock Stripe is trusted only through the CA stored on the key service.
+    setEnv(loadEnv({ ...testEnvVars(backendDb.uri), PUBLIC_URL: "https://hooks.cb.test" }));
+    resetUpstreamDispatcher();
+    try {
+      const { owner, services } = await project({ stripeKey: false });
+      const key = await owner.post(services, {
+        key: "STRIPE_SECRET_KEY",
+        preset: "stripe",
+        test: false,
+        resource: {
+          kind: "http",
+          apiKey: STRIPE_KEY,
+          upstreamUrl: payments.url,
+          redirectHosts: [],
+          caCert: fs.readFileSync(payments.caFile, "utf8"),
+        },
+      });
+      expect(key.status, JSON.stringify(key.body)).toBe(201);
+      expect(key.body.data.service.config.caCertFile).toBeTruthy(); // stored in the file store, not inline
+      const r = await owner.post(services, {
+        key: "STRIPE_WEBHOOK_SECRET",
+        resource: { kind: "webhook", provider: "stripe", path: "/api/webhooks/stripe" },
+      });
+      const c = await owner.post(`/api/resources/${r.body.data.service.id}/webhook/connect`, {});
+      expect(c.status, JSON.stringify(c.body)).toBe(200);
+    } finally {
+      setEnv(
+        loadEnv({
+          ...testEnvVars(backendDb.uri),
+          UPSTREAM_EXTRA_CA_FILE: payments.caFile,
+          PUBLIC_URL: "https://hooks.cb.test",
+        }),
+      );
+      resetUpstreamDispatcher();
+    }
   });
 
   it("connect creates one all-events endpoint at the cb URL, stores its secret, and accepts what Stripe signs", async () => {
