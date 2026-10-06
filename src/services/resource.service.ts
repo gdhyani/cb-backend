@@ -105,6 +105,7 @@ const WebhookPath = z
   .regex(/^\/(?!\/)[^\s?#\\]*(\?[^\s#]*)?$/, "a path in your app, e.g. /api/webhooks/stripe");
 const WebhookPort = z.number().int().min(1).max(65_535);
 const WebhookProviderEnum = z.enum(WEBHOOK_PROVIDERS);
+const AwsService = z.enum(["s3", "ses", "sqs"]);
 const SigningSecret = z.string().trim().min(8).max(500);
 const StripeSecret = SigningSecret.refine(
   (v) => v.startsWith("whsec_"),
@@ -212,6 +213,8 @@ export const CreateResourceBody = z
       endpoint: UpstreamUrl,
       accessKeyId: z.string().min(3),
       secretAccessKey: z.string().min(8),
+      /** Which AWS API the endpoint serves (dashboard Service choice); read from the endpoint when absent. */
+      awsService: AwsService.optional(),
     }),
     z.object({
       kind: z.literal("google-sa"),
@@ -294,6 +297,7 @@ export const UpdateResourceBody = z.object({
     .regex(/^[a-z0-9-]+$/)
     .optional(),
   endpoint: UpstreamUrl.optional(),
+  awsService: AwsService.optional(),
   clientSecret: z.string().min(1).optional(),
   tokenUrl: HttpsOnlyUrl.optional(),
   name: Name.optional(),
@@ -406,6 +410,7 @@ export function configAndSecret(
       ...current,
       ...(input.region ? { region: input.region } : {}),
       ...(input.endpoint ? { endpoint: input.endpoint } : {}),
+      ...(input.awsService ? { awsService: input.awsService } : {}),
     };
     const secret =
       input.accessKeyId && input.secretAccessKey
