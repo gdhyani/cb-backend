@@ -19,6 +19,7 @@ import { parseWebhookSecrets } from "../webhooks/secrets.js";
 import { requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { DEFAULT_PROFILE, readProfileSecret } from "./profile.service.js";
+import { healthFromTest, markHealth } from "./resource-health.service.js";
 import { readResourceSecret } from "./resource-secret.service.js";
 import { withCaCert } from "./secret-file.service.js";
 
@@ -463,6 +464,8 @@ export async function testResource(
     ((await withCaCert(resource)).config as Record<string, unknown>) ?? {},
   );
   const result: ResourceTestDto = { ...draft, profile };
+  // B11: only the default credentials decide the key's status shown in the table.
+  if (profile === DEFAULT_PROFILE) await markHealth(resource._id, healthFromTest(draft));
   await recordAudit({
     orgId: resource.orgId,
     actorId,

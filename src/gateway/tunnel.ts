@@ -15,6 +15,7 @@ import { assertRuntimeAccess } from "../services/access.service.js";
 import { recordAudit } from "../services/audit.service.js";
 import { loadOrgCa } from "../services/org-ca.service.js";
 import { DEFAULT_PROFILE, readProfileSecret, resolveProfile } from "../services/profile.service.js";
+import { healthFromUpstreamError, noteHealth } from "../services/resource-health.service.js";
 import { readResourceSecret } from "../services/resource-secret.service.js";
 import { eventConcerns, revalidate } from "../services/runtime-access.service.js";
 import { withCaCert } from "../services/secret-file.service.js";
@@ -271,6 +272,8 @@ async function handleTunnel(
     await adapter(stream, ctx, hooks);
   } catch (err) {
     const summary = err instanceof UpstreamError ? err.message : "gateway error";
+    // B11: the stored login stopped working upstream (deleted user, rotated password) → "Expired" in the dashboard.
+    noteHealth(resource._id, healthFromUpstreamError(summary));
     logger.warn(`tunnel ${ctx.id.slice(0, 8)} → 4502 ${resource.kind}:${resource.name} — ${summary}`);
     if (!(err instanceof UpstreamError))
       logger.error(`tunnel ${ctx.id.slice(0, 8)} adapter failure`, {

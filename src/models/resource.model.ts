@@ -34,6 +34,14 @@ const ResourceSchema = new Schema(
       select: false,
     },
     rotatedAt: { type: Date, default: null },
+    /** B11: whether the provider still accepts the key (never the key itself). */
+    health: {
+      type: new Schema(
+        { status: { type: String, enum: ["ok", "rejected", "unknown"] }, reason: String, checkedAt: Date },
+        { _id: false },
+      ),
+      default: undefined,
+    },
     disabledAt: { type: Date, default: null },
   },
   { timestamps: true, minimize: false },

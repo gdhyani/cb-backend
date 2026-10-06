@@ -377,6 +377,8 @@ export interface ResourceDto {
   credentialsSet: boolean;
   rotatedAt: string | null;
   disabled: boolean;
+  /** B11: green when the provider accepts the key, rejected ("Expired") when it refused it. */
+  health: { status: "ok" | "rejected" | "unknown"; reason: string | null; checkedAt: string | null };
   brokeredFields: readonly string[];
   createdAt: string;
   /** Webhook services: the URL to paste into the provider's webhook settings (FR-WH-001). */
@@ -405,6 +407,7 @@ export function toResourceDto(r: {
   rotatedAt?: Date | null;
   disabledAt?: Date | null;
   createdAt?: Date;
+  health?: { status?: string | null; reason?: string | null; checkedAt?: Date | null } | null;
 }): ResourceDto {
   const kind = r.kind as ResourceKind;
   return {
@@ -416,6 +419,11 @@ export function toResourceDto(r: {
     credentialsSet: true,
     rotatedAt: r.rotatedAt?.toISOString() ?? null,
     disabled: Boolean(r.disabledAt),
+    health: {
+      status: (r.health?.status as ResourceDto["health"]["status"]) ?? "unknown",
+      reason: r.health?.reason ?? null,
+      checkedAt: r.health?.checkedAt?.toISOString() ?? null,
+    },
     brokeredFields: BROKERED_FIELDS[kind],
     createdAt: (r.createdAt ?? new Date()).toISOString(),
     ...(kind === "webhook" ? { webhookUrl: webhookUrlOf(r._id.toHexString()) } : {}),
@@ -772,15 +780,20 @@ export async function updateResource(
         },
       ],
     });
+  let tested = false;
   if (input.test) {
     const candidate = secret ?? (await readResourceSecret(resourceId));
     // Loaded lazily: resource-test → profile → resource would otherwise be a load-order-dependent cycle.
     const { runDraftTest } = await import("./resource-test.service.js");
     const result = await runDraftTest(kind, candidate, config);
     if (!result.ok) throw new AppError("SERVICE_TEST_FAILED", { message: result.message });
+    tested = true;
   }
+  // Only after a passing test: a refused change must leave no new object in the file store.
   const stored = await storeCa(resource.orgId, resourceId, config, previousCa);
   const update: Record<string, unknown> = { config: stored.config };
+  if (tested) update.health = { status: "ok", reason: null, checkedAt: new Date() };
+  else if (secret) update.health = { status: "unknown", reason: null, checkedAt: null };
   const stale: (FileRef | undefined)[] = [stored.stale];
   if (input.name) update.name = input.name;
   if (secret && FILE_KINDS.has(kind)) {

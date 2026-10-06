@@ -5,6 +5,7 @@ import { safeEqual } from "../../crypto/safe-equal.js";
 import { logger } from "../../logger/logger.js";
 import { recordAudit } from "../../services/audit.service.js";
 import { fakeApiKey } from "../../services/fakes.service.js";
+import { healthTap } from "../../services/resource-health.service.js";
 import type { TunnelContext } from "../types.js";
 import {
   type GatewayRequest,
@@ -106,7 +107,13 @@ export function createOAuthHandler(ctx: TunnelContext): Handler {
           up.statusCode,
           redactHeaders(out, [ctx.secret]),
         );
-        await pipeline(up.body, createRedactor(ctx.secret), res as unknown as NodeJS.WritableStream);
+        const tap = swapped ? healthTap("oauth", up.statusCode, ctx.resource.id) : undefined;
+        await pipeline([
+          up.body,
+          createRedactor(ctx.secret),
+          ...(tap ? [tap] : []),
+          res as unknown as NodeJS.WritableStream,
+        ]);
         if (swapped) {
           void recordAudit({
             orgId: ctx.orgId,

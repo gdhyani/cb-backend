@@ -9,6 +9,7 @@ import type { LeafCache } from "../../crypto/ca.js";
 import { safeEqual } from "../../crypto/safe-equal.js";
 import { recordAudit } from "../../services/audit.service.js";
 import { fakeApiKey } from "../../services/fakes.service.js";
+import { healthTap } from "../../services/resource-health.service.js";
 import { learnFromResponse, paymentProviderOf } from "../../services/webhook-owner.service.js";
 import { upstreamAllowed } from "../../utils/upstream-url.js";
 import { asSocketLike } from "../socket-like.js";
@@ -216,9 +217,10 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
                   : undefined,
               )
             : undefined;
-        await (learn
-          ? pipeline(up.body, createRedactor(ctx.secret), learn, res as unknown as NodeJS.WritableStream)
-          : pipeline(up.body, createRedactor(ctx.secret), res as unknown as NodeJS.WritableStream));
+        // B11: what the provider said about the key (2xx ok, 401 rejected …), recorded without delaying the app.
+        const tap = healthTap("http", up.statusCode, ctx.resource.id);
+        const steps = [createRedactor(ctx.secret), ...(learn ? [learn] : []), ...(tap ? [tap] : [])];
+        await pipeline([up.body, ...steps, res as unknown as NodeJS.WritableStream]);
         void recordAudit({
           orgId: ctx.orgId,
           actorId: ctx.userId,

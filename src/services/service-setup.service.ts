@@ -15,6 +15,7 @@ import {
   MAIN_FIELD,
   type ResourceDto,
 } from "./resource.service.js";
+import { markHealth } from "./resource-health.service.js";
 import { runDraftTest } from "./resource-test.service.js";
 import { createVariable, type VariableDto } from "./variable.service.js";
 
@@ -96,6 +97,11 @@ export async function createService(
   }
 
   const service = await createResource(actorId, envId, parsed, { touch: false });
+  // B11: a passing Save & test is the first proof the provider accepts the key.
+  if (test?.ok) {
+    await markHealth(service.id, { status: "ok" });
+    service.health = { status: "ok", reason: null, checkedAt: new Date().toISOString() };
+  }
   try {
     const variables: VariableDto[] = [
       await createVariable(

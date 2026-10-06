@@ -8,6 +8,7 @@ import { safeEqual } from "../../crypto/safe-equal.js";
 import { logger } from "../../logger/logger.js";
 import { recordAudit } from "../../services/audit.service.js";
 import { fakeAwsKeys } from "../../services/fakes.service.js";
+import { healthTap } from "../../services/resource-health.service.js";
 import { upstreamAllowed } from "../../utils/upstream-url.js";
 import type { TunnelContext } from "../types.js";
 import {
@@ -168,11 +169,13 @@ export function createAwsHandler(ctx: TunnelContext): Handler {
           up.statusCode,
           redactHeaders(out, [real.secretAccessKey, real.accessKeyId]),
         );
-        await pipeline(
+        const tap = healthTap("aws", up.statusCode, ctx.resource.id);
+        await pipeline([
           up.body,
           createRedactor([real.secretAccessKey, real.accessKeyId]),
+          ...(tap ? [tap] : []),
           res as unknown as NodeJS.WritableStream,
-        );
+        ]);
         void recordAudit({
           orgId: ctx.orgId,
           actorId: ctx.userId,
