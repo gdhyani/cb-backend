@@ -1,4 +1,5 @@
 import { Transform, type TransformCallback } from "node:stream";
+import zlib from "node:zlib";
 
 export const REDACTED = "[cb-redacted]";
 
@@ -54,4 +55,28 @@ export function createRedactor(secrets: string | string[]): Transform {
       cb(null, scrub(tail));
     },
   });
+}
+
+/**
+ * C1 (FR-GW-006): redaction only works on plain bytes. A provider that compresses anyway (we never forward the app's
+ * accept-encoding) is decompressed here; the app then gets an identity body without content-encoding/length.
+ */
+export function decoded(
+  body: NodeJS.ReadableStream,
+  headers: Record<string, string | string[]>,
+): { body: NodeJS.ReadableStream; headers: Record<string, string | string[]> } {
+  const enc = String(headers["content-encoding"] ?? "")
+    .trim()
+    .toLowerCase();
+  const make =
+    enc === "gzip" || enc === "x-gzip"
+      ? zlib.createGunzip
+      : enc === "deflate"
+        ? zlib.createInflate
+        : enc === "br"
+          ? zlib.createBrotliDecompress
+          : undefined;
+  if (!make) return { body, headers };
+  const { "content-encoding": _e, "content-length": _l, ...rest } = headers;
+  return { body: body.pipe(make()), headers: rest };
 }

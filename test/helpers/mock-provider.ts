@@ -3,6 +3,7 @@ import https from "node:https";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import { createCa, mintLeaf } from "../../src/crypto/ca.js";
 
 export interface ProviderRequest {
@@ -39,6 +40,20 @@ export async function startMockProvider(realKey: string, clientSecret = "unused-
     if (ok && req.url?.startsWith("/v1/redirect")) {
       res.writeHead(302, { location: `https://elsewhere.test/cb?k=${realKey}` });
       res.end();
+      return;
+    }
+    // C1: compresses when asked (like real providers), and always on /v1/gzip-always (a provider that ignores it).
+    const gzip =
+      ok &&
+      (String(req.headers["accept-encoding"] ?? "").includes("gzip") ||
+        req.url?.startsWith("/v1/gzip-always"));
+    if (gzip) {
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "content-encoding": "gzip",
+        "x-echo-auth": req.headers.authorization ?? "",
+      });
+      res.end(gzipSync(JSON.stringify({ ok: true, path: req.url, echo: `token was ${realKey}` })));
       return;
     }
     // Echoes the auth header back so header redaction (N3) can be tested.

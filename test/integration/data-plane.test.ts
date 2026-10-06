@@ -2,6 +2,7 @@ import type http from "node:http";
 import { request as httpRequest } from "node:http";
 import net, { type AddressInfo } from "node:net";
 import tls from "node:tls";
+import { gunzipSync } from "node:zlib";
 import { Redis } from "ioredis";
 import { MongoClient } from "mongodb";
 import { MongoMemoryServer } from "mongodb-memory-server";
@@ -338,6 +339,41 @@ describe("tunnels through real services (T4, FR-GW-001, FR-GW-002)", () => {
     await res.text();
     expect(res.headers.get("x-echo-auth")).toBe("Bearer [cb-redacted]");
     for (const [, v] of res.headers) expect(v).not.toContain(API_KEY);
+    listener.close();
+  });
+
+  it("C1 S8 a compressed response is redacted too (app asks for gzip; provider gzips regardless)", async () => {
+    const { token, envId, resources, boot } = await scenario();
+    const listener = await localListener(base, token, { layer: "1", env: envId, resource: resources.api });
+    for (const path of ["/v1/models", "/v1/gzip-always"]) {
+      const res = await new Promise<{ body: Buffer; headers: http.IncomingHttpHeaders }>(
+        (resolve, reject) => {
+          const req = httpRequest(
+            {
+              host: "127.0.0.1",
+              port: listener.port,
+              path,
+              agent: false,
+              headers: {
+                authorization: `Bearer ${boot.body.data.plain.PROVIDER_API_KEY}`,
+                "accept-encoding": "gzip, br",
+              },
+            },
+            (r) => {
+              const chunks: Buffer[] = [];
+              r.on("data", (c: Buffer) => chunks.push(c));
+              r.on("end", () => resolve({ body: Buffer.concat(chunks), headers: r.headers }));
+            },
+          );
+          req.on("error", reject);
+          req.end();
+        },
+      );
+      const text =
+        res.headers["content-encoding"] === "gzip" ? gunzipSync(res.body).toString() : res.body.toString();
+      expect(text, path).toContain("token was [cb-redacted]");
+      expect(text, path).not.toContain(API_KEY);
+    }
     listener.close();
   });
 

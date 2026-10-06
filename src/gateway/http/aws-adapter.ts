@@ -18,7 +18,7 @@ import {
   HOP_BY_HOP,
   sendJson,
 } from "./http-adapter.js";
-import { createRedactor, redactHeaders } from "./redaction.js";
+import { createRedactor, decoded, redactHeaders } from "./redaction.js";
 import { upstreamDispatcher } from "./upstream.js";
 
 export interface AwsResourceConfig {
@@ -165,13 +165,15 @@ export function createAwsHandler(ctx: TunnelContext): Handler {
           if (!HOP_BY_HOP.has(k) && v !== undefined) out[k] = v;
         if (up.headers["content-length"] !== undefined && method === "HEAD")
           out["content-length"] = String(up.headers["content-length"]);
+        // C1: error bodies (where AWS quotes keys) are decoded before redaction; object downloads stay byte-exact.
+        const plain = up.statusCode >= 400 ? decoded(up.body, out) : { body: up.body, headers: out };
         (res as import("node:http").ServerResponse).writeHead(
           up.statusCode,
-          redactHeaders(out, [real.secretAccessKey, real.accessKeyId]),
+          redactHeaders(plain.headers, [real.secretAccessKey, real.accessKeyId]),
         );
         const tap = healthTap("aws", up.statusCode, ctx.resource.id);
         await pipeline([
-          up.body,
+          plain.body,
           createRedactor([real.secretAccessKey, real.accessKeyId]),
           ...(tap ? [tap] : []),
           res as unknown as NodeJS.WritableStream,
