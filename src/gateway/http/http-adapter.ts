@@ -34,6 +34,8 @@ export interface HttpResourceConfig {
   extraHeaders?: Record<string, string>;
   /** Preset that made the service (stripe, razorpay…); payment providers get webhook owner tracking. */
   provider?: string;
+  /** Requests with another (public) key go through unchanged; a stand-in that isn't this device's is refused. */
+  passOtherKeys?: boolean;
 }
 
 /** Larger responses are lists or files, never a created payment object. */
@@ -146,9 +148,13 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
   const upstream = new URL(config.upstreamUrl);
   const prefix = upstream.pathname.replace(/\/$/, "");
 
+  const fakePrefix = config.fakePrefix ?? "cb_";
   return (req, res) => {
     const presented = extractCredential(scheme, req.headers, config.authHeader);
-    if (!presented || !safeEqual(presented, expected)) {
+    const own = Boolean(presented && safeEqual(presented, expected));
+    // passOtherKeys: a public key (Supabase publishable) or none goes through untouched; any cb stand-in must be ours.
+    const passThrough = !own && config.passOtherKeys === true && !(presented ?? "").startsWith(fakePrefix);
+    if (!own && !passThrough) {
       req.resume();
       sendJson(res, 401, { error: "cb_invalid_credential" });
       return;
@@ -166,16 +172,17 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
       if (!k.startsWith(":") && !HOP_BY_HOP.has(k) && v !== undefined)
         headers[k] = Array.isArray(v) ? v.join(", ") : v;
     }
-    const outHeaders = {
+    const merged = { ...headers, ...(config.extraHeaders ?? {}) };
+    const outHeaders: Record<string, string> = {
       // The service's headers win over the app's; the credential is injected last, so nothing overrides it.
-      ...injectCredential(
-        scheme,
-        { ...headers, ...(config.extraHeaders ?? {}) },
-        ctx.secret,
-        config.authHeader,
-      ),
+      ...(passThrough ? merged : injectCredential(scheme, merged, ctx.secret, config.authHeader)),
       host: upstream.host,
     };
+    // SDKs that send the key twice (Supabase: apikey + Authorization: Bearer) get the real key everywhere the
+    // device's own stand-in appears — only that exact value is replaced.
+    if (own)
+      for (const [k, v] of Object.entries(outHeaders))
+        if (k !== "host" && v.includes(expected)) outHeaders[k] = v.split(expected).join(ctx.secret);
     const method = req.method ?? "GET";
     request(target, {
       method: method as "GET",

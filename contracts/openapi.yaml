@@ -1,6 +1,6 @@
 # cb API contract. Owned by cb-backend; consumers run `npm run sync:contract`.
 openapi: 3.1.0
-x-contract-version: 1.6.0
+x-contract-version: 1.7.0
 info:
   title: cb API
   version: 1.0.0
@@ -4885,6 +4885,12 @@ components:
           description: >-
             OQ9: non-secret headers sent on every call (stored lowercased). Not allowed: authorization, x-api-key,
             cookie, host and transport headers, or the named key header.
+        passOtherKeys:
+          type: boolean
+          description: >-
+            Requests that carry another key (a public/publishable key) or none go through unchanged, never with the
+            real key added; a cb stand-in that is not the device's own is still refused (Supabase preset). In every
+            case the device's own stand-in is replaced by the real key in every header that carries it.
       required:
         - kind
         - name
@@ -5124,6 +5130,9 @@ components:
           maxProperties: 10
           additionalProperties: { type: string, maxLength: 500 }
           description: OQ9 — replaces the service's extra headers ({} removes them).
+        passOtherKeys:
+          type: boolean
+          description: API services — let other (public) keys through unchanged.
         signingSecret:
           type: string
           minLength: 8
