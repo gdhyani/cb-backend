@@ -45,3 +45,27 @@ describe("redaction (FR-GW-006, S8)", () => {
     expect(out).toBe(`aa ${REDACTED} bb`);
   });
 });
+
+describe("redaction covers every encoding a secret travels in (I1)", () => {
+  const SECRET = "wJalr/XUtnF+EMI=K7MDENG/bPxRfi"; // AWS-like: has / + =
+  it("I1 URL-encoded (Location, query), base64url and JSON-escaped forms are redacted", () => {
+    const enc = encodeURIComponent(SECRET);
+    const out = redactHeaders(
+      {
+        location: `https://x.test/cb?k=${enc}`,
+        "x-b64url": Buffer.from(SECRET).toString("base64url"),
+        "x-json": JSON.stringify({ k: SECRET }).replace(/\//g, "\\/"),
+      },
+      [SECRET],
+    );
+    expect(JSON.stringify(out)).not.toContain(enc);
+    expect(JSON.stringify(out)).not.toContain(Buffer.from(SECRET).toString("base64url"));
+    expect(out["x-json"]).not.toContain(SECRET.replace(/\//g, "\\/"));
+  });
+
+  it("I1 a body with the JSON-escaped secret is redacted", async () => {
+    const body = JSON.stringify({ echo: SECRET }).replace(/\//g, "\\/");
+    const out = await text(Readable.from([Buffer.from(body)]).pipe(createRedactor(SECRET)));
+    expect(out).not.toContain(SECRET.replace(/\//g, "\\/"));
+  });
+});

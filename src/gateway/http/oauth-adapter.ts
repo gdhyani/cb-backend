@@ -14,7 +14,7 @@ import {
   HOP_BY_HOP,
   sendJson,
 } from "./http-adapter.js";
-import { createRedactor, decoded, redactHeaders } from "./redaction.js";
+import { createRedactor, decoded, injectedBasic, redactHeaders } from "./redaction.js";
 import { upstreamDispatcher } from "./upstream.js";
 
 export interface OAuthResourceConfig {
@@ -104,14 +104,15 @@ export function createOAuthHandler(ctx: TunnelContext): Handler {
         for (const [k, v] of Object.entries(up.headers))
           if (!HOP_BY_HOP.has(k) && v !== undefined) out[k] = v;
         const plain = decoded(up.body, out);
+        const secrets = [ctx.secret, ...injectedBasic(headers.authorization)];
         (res as import("node:http").ServerResponse).writeHead(
           up.statusCode,
-          redactHeaders(plain.headers, [ctx.secret]),
+          redactHeaders(plain.headers, secrets),
         );
         const tap = swapped ? healthTap("oauth", up.statusCode, ctx.resource.id) : undefined;
         await pipeline([
           plain.body,
-          createRedactor(ctx.secret),
+          createRedactor(secrets),
           ...(tap ? [tap] : []),
           res as unknown as NodeJS.WritableStream,
         ]);

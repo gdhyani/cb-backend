@@ -14,7 +14,7 @@ import { learnFromResponse, paymentProviderOf } from "../../services/webhook-own
 import { upstreamAllowed } from "../../utils/upstream-url.js";
 import { asSocketLike } from "../socket-like.js";
 import type { StreamAdapter, TunnelContext } from "../types.js";
-import { createRedactor, decoded, redactHeaders } from "./redaction.js";
+import { createRedactor, decoded, injectedBasic, redactHeaders } from "./redaction.js";
 import { upstreamDispatcher } from "./upstream.js";
 
 export type AuthScheme = "bearer" | "x-api-key" | "basic-password" | "header";
@@ -198,7 +198,8 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
         for (const [k, v] of Object.entries(up.headers))
           if (!HOP_BY_HOP.has(k) && v !== undefined) out[k] = v;
         const plain = decoded(up.body, out);
-        (res as http.ServerResponse).writeHead(up.statusCode, redactHeaders(plain.headers, [ctx.secret]));
+        const secrets = [ctx.secret, ...injectedBasic(outHeaders.authorization)];
+        (res as http.ServerResponse).writeHead(up.statusCode, redactHeaders(plain.headers, secrets));
         const provider = paymentProviderOf(config);
         const learn =
           method === "POST" && provider && up.statusCode >= 200 && up.statusCode < 300
@@ -220,7 +221,7 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
             : undefined;
         // B11: what the provider said about the key (2xx ok, 401 rejected …), recorded without delaying the app.
         const tap = healthTap("http", up.statusCode, ctx.resource.id);
-        const steps = [createRedactor(ctx.secret), ...(learn ? [learn] : []), ...(tap ? [tap] : [])];
+        const steps = [createRedactor(secrets), ...(learn ? [learn] : []), ...(tap ? [tap] : [])];
         await pipeline([plain.body, ...steps, res as unknown as NodeJS.WritableStream]);
         void recordAudit({
           orgId: ctx.orgId,

@@ -3,12 +3,29 @@ import zlib from "node:zlib";
 
 export const REDACTED = "[cb-redacted]";
 
-/** Every form a secret is redacted in: raw and base64 (≥ 6 chars, so short values never shred a response). */
+/**
+ * Every form a secret is redacted in (≥ 6 chars, so short values never shred a response): raw, base64, base64url,
+ * URL-encoded (Location, query strings) and JSON-escaped (`/` → `\/`). I1.
+ */
 function needlesOf(secrets: string | string[]): string[] {
-  return (Array.isArray(secrets) ? secrets : [secrets])
+  const all = (Array.isArray(secrets) ? secrets : [secrets])
     .filter(Boolean)
-    .flatMap((s) => [s, Buffer.from(s).toString("base64")])
+    .flatMap((s) => [
+      s,
+      Buffer.from(s).toString("base64"),
+      Buffer.from(s).toString("base64url"),
+      encodeURIComponent(s),
+      s.replace(/\//g, "\\/"),
+    ])
     .filter((n) => n.length >= 6);
+  // Longest first, so a longer form is replaced before a shorter one it contains.
+  return [...new Set(all)].sort((a, b) => b.length - a.length);
+}
+
+/** I1: the Basic credential the gateway itself injected (base64 of `user:secret`) is as sensitive as the secret. */
+export function injectedBasic(authorization: string | undefined): string[] {
+  const m = /^Basic\s+(\S+)$/i.exec(authorization ?? "");
+  return m?.[1] ? [m[1]] : [];
 }
 
 /** N3 (S8): header values get the same treatment as bodies — a provider may echo the key in a header or Location. */

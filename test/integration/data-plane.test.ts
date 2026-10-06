@@ -377,6 +377,43 @@ describe("tunnels through real services (T4, FR-GW-001, FR-GW-002)", () => {
     listener.close();
   });
 
+  it("I1 a Basic-auth service: the provider echoing the Authorization header gets it redacted", async () => {
+    const { owner, envId, token, app } = await scenario();
+    const basic = await owner.post(`/api/environments/${envId}/resources`, {
+      kind: "http",
+      name: "basic-api",
+      upstreamUrl: provider.url,
+      apiKey: API_KEY,
+      authScheme: "basic-password",
+      basicUser: "rzp_test_public_id",
+      fakePrefix: "cb_",
+    });
+    await owner.post(`/api/environments/${envId}/variables`, {
+      type: "brokered",
+      key: "BASIC_SECRET",
+      resourceId: basic.body.data.id,
+      field: "key",
+    });
+    const projectId = (await owner.get(`/api/environments/${envId}`)).body.data.projectId;
+    const boot = await cli(app as never, token).get(
+      `/api/agent/bootstrap?projectId=${projectId}&env=development`,
+    );
+    const listener = await localListener(base, token, {
+      layer: "1",
+      env: envId,
+      resource: basic.body.data.id,
+    });
+    const stand = Buffer.from(`rzp_test_public_id:${boot.body.data.plain.BASIC_SECRET}`).toString("base64");
+    const res = await fetch(`http://127.0.0.1:${listener.port}/v1/orders`, {
+      headers: { authorization: `Basic ${stand}` },
+    });
+    await res.text();
+    const injected = Buffer.from(`rzp_test_public_id:${API_KEY}`).toString("base64");
+    expect(res.headers.get("x-echo-auth")).not.toContain(injected);
+    expect(res.headers.get("x-echo-auth")).toContain("[cb-redacted]");
+    listener.close();
+  });
+
   it("N4 a 3xx is passed back, not followed; its Location is redacted", async () => {
     const { token, envId, resources, boot } = await scenario();
     const listener = await localListener(base, token, { layer: "1", env: envId, resource: resources.api });
