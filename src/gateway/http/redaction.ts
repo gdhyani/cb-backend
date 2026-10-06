@@ -2,14 +2,32 @@ import { Transform, type TransformCallback } from "node:stream";
 
 export const REDACTED = "[cb-redacted]";
 
+/** Every form a secret is redacted in: raw and base64 (≥ 6 chars, so short values never shred a response). */
+function needlesOf(secrets: string | string[]): string[] {
+  return (Array.isArray(secrets) ? secrets : [secrets])
+    .filter(Boolean)
+    .flatMap((s) => [s, Buffer.from(s).toString("base64")])
+    .filter((n) => n.length >= 6);
+}
+
+/** N3 (S8): header values get the same treatment as bodies — a provider may echo the key in a header or Location. */
+export function redactHeaders(
+  headers: Record<string, string | string[]>,
+  secrets: string[],
+): Record<string, string | string[]> {
+  const needles = needlesOf(secrets);
+  const scrub = (v: string) => needles.reduce((acc, n) => acc.split(n).join(REDACTED), v);
+  return Object.fromEntries(
+    Object.entries(headers).map(([k, v]) => [k, Array.isArray(v) ? v.map(scrub) : scrub(v)]),
+  );
+}
+
 /**
- * FR-GW-006: replaces the real secret (and its base64 form) in response bytes.
+ * FR-GW-006: replaces the real secret(s) (and their base64 form) in response bytes.
  * Keeps a tail of (longest needle - 1) bytes between chunks so split matches are still caught.
  */
-export function createRedactor(secret: string): Transform {
-  const needles = [secret, Buffer.from(secret).toString("base64")]
-    .filter((n) => n.length >= 6)
-    .map((n) => Buffer.from(n));
+export function createRedactor(secrets: string | string[]): Transform {
+  const needles = needlesOf(secrets).map((n) => Buffer.from(n));
   const keep = Math.max(0, ...needles.map((n) => n.length - 1));
   let tail: Buffer = Buffer.alloc(0);
 

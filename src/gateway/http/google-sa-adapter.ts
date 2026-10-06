@@ -18,7 +18,7 @@ import {
   sendJson,
 } from "./http-adapter.js";
 import { readBody } from "./oauth-adapter.js";
-import { createRedactor } from "./redaction.js";
+import { createRedactor, redactHeaders } from "./redaction.js";
 import { upstreamDispatcher } from "./upstream.js";
 
 export interface GoogleSaConfig {
@@ -173,7 +173,7 @@ export function createGoogleSaHandler(ctx: TunnelContext): Handler {
     });
     const out: Record<string, string | string[]> = {};
     for (const [k, v] of Object.entries(up.headers)) if (!HOP_BY_HOP.has(k) && v !== undefined) out[k] = v;
-    (res as import("node:http").ServerResponse).writeHead(up.statusCode, out);
+    (res as import("node:http").ServerResponse).writeHead(up.statusCode, redactHeaders(out, [realToken]));
     await pipeline(up.body, createRedactor(realToken), res as unknown as NodeJS.WritableStream);
     audit({ method, host, path: (req.url ?? "/").split("?")[0], status: up.statusCode, swap: "bearer" });
   }

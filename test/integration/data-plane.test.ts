@@ -329,6 +329,33 @@ describe("tunnels through real services (T4, FR-GW-001, FR-GW-002)", () => {
     expect(raw).not.toContain(API_KEY);
   });
 
+  it("N3 S8 upstream response headers are redacted, not only the body (FR-GW-006)", async () => {
+    const { token, envId, resources, boot } = await scenario();
+    const listener = await localListener(base, token, { layer: "1", env: envId, resource: resources.api });
+    const res = await fetch(`http://127.0.0.1:${listener.port}/v1/models`, {
+      headers: { authorization: `Bearer ${boot.body.data.plain.PROVIDER_API_KEY}` },
+    });
+    await res.text();
+    expect(res.headers.get("x-echo-auth")).toBe("Bearer [cb-redacted]");
+    for (const [, v] of res.headers) expect(v).not.toContain(API_KEY);
+    listener.close();
+  });
+
+  it("N4 a 3xx is passed back, not followed; its Location is redacted", async () => {
+    const { token, envId, resources, boot } = await scenario();
+    const listener = await localListener(base, token, { layer: "1", env: envId, resource: resources.api });
+    const before = provider.requests.length;
+    const res = await fetch(`http://127.0.0.1:${listener.port}/v1/redirect`, {
+      redirect: "manual",
+      headers: { authorization: `Bearer ${boot.body.data.plain.PROVIDER_API_KEY}` },
+    });
+    await res.text();
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("https://elsewhere.test/cb?k=[cb-redacted]");
+    expect(provider.requests.length).toBe(before + 1);
+    listener.close();
+  });
+
   it("FR-GW-001 rejects bad tokens (4401) and foreign resources (4403)", async () => {
     const { envId, resources } = await scenario();
     const attempt = (token: string, resource: string) =>

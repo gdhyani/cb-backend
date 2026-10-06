@@ -13,7 +13,7 @@ import { learnFromResponse, paymentProviderOf } from "../../services/webhook-own
 import { upstreamAllowed } from "../../utils/upstream-url.js";
 import { asSocketLike } from "../socket-like.js";
 import type { StreamAdapter, TunnelContext } from "../types.js";
-import { createRedactor } from "./redaction.js";
+import { createRedactor, redactHeaders } from "./redaction.js";
 import { upstreamDispatcher } from "./upstream.js";
 
 export type AuthScheme = "bearer" | "x-api-key" | "basic-password" | "header";
@@ -194,7 +194,7 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
         const out: Record<string, string | string[]> = {};
         for (const [k, v] of Object.entries(up.headers))
           if (!HOP_BY_HOP.has(k) && v !== undefined) out[k] = v;
-        (res as http.ServerResponse).writeHead(up.statusCode, out);
+        (res as http.ServerResponse).writeHead(up.statusCode, redactHeaders(out, [ctx.secret]));
         const provider = paymentProviderOf(config);
         const learn =
           method === "POST" && provider && up.statusCode >= 200 && up.statusCode < 300

@@ -36,7 +36,16 @@ export async function startMockProvider(realKey: string, clientSecret = "unused-
       return;
     }
     const ok = req.headers.authorization === `Bearer ${realKey}`;
-    res.writeHead(ok ? 200 : 401, { "content-type": "application/json" });
+    if (ok && req.url?.startsWith("/v1/redirect")) {
+      res.writeHead(302, { location: `https://elsewhere.test/cb?k=${realKey}` });
+      res.end();
+      return;
+    }
+    // Echoes the auth header back so header redaction (N3) can be tested.
+    res.writeHead(ok ? 200 : 401, {
+      "content-type": "application/json",
+      "x-echo-auth": req.headers.authorization ?? "",
+    });
     res.end(JSON.stringify(ok ? { ok: true, path: req.url, echo: `token was ${realKey}` } : { ok: false }));
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));

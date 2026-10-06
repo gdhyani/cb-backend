@@ -13,7 +13,7 @@ import {
   HOP_BY_HOP,
   sendJson,
 } from "./http-adapter.js";
-import { createRedactor } from "./redaction.js";
+import { createRedactor, redactHeaders } from "./redaction.js";
 import { upstreamDispatcher } from "./upstream.js";
 
 export interface OAuthResourceConfig {
@@ -102,7 +102,10 @@ export function createOAuthHandler(ctx: TunnelContext): Handler {
         const out: Record<string, string | string[]> = {};
         for (const [k, v] of Object.entries(up.headers))
           if (!HOP_BY_HOP.has(k) && v !== undefined) out[k] = v;
-        (res as import("node:http").ServerResponse).writeHead(up.statusCode, out);
+        (res as import("node:http").ServerResponse).writeHead(
+          up.statusCode,
+          redactHeaders(out, [ctx.secret]),
+        );
         await pipeline(up.body, createRedactor(ctx.secret), res as unknown as NodeJS.WritableStream);
         if (swapped) {
           void recordAudit({
