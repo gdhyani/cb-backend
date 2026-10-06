@@ -1,6 +1,6 @@
 # cb API contract. Owned by cb-backend; consumers run `npm run sync:contract`.
 openapi: 3.1.0
-x-contract-version: 1.4.0
+x-contract-version: 1.5.0
 info:
   title: cb API
   version: 1.0.0
@@ -501,6 +501,90 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/webhook-events/{eventId}/send-to-me:
+    post:
+      operationId: sendWebhookEventToMe
+      tags:
+        - Webhooks
+      summary: Send an event to the caller's own signed-in machines (admin; events nobody owns, e.g. dashboard tests)
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ObjectId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          queued:
+                            type: integer
+                        required: [queued]
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/resources/{resourceId}/webhook/connect:
+    post:
+      operationId: connectStripeWebhook
+      tags:
+        - Webhooks
+      summary: Create (or point again) the Stripe webhook endpoint with the environment's stored Stripe key (admin)
+      description: >-
+        Uses the Stripe secret key stored in the same environment to create an all-events webhook endpoint at this
+        service's webhookUrl; the signing secret Stripe returns is stored and never shown. Connecting again updates
+        the endpoint's URL and keeps its secret.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ObjectId"
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Resource"
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ServiceTestFailed"
   /api/webhook-events/{eventId}/replay:
     post:
       operationId: replayWebhookEvent
@@ -3932,7 +4016,10 @@ components:
         webhookUrl:
           type: string
           format: uri
-          description: Webhook services only — paste into the provider's webhook settings (PUBLIC_URL + /api/hooks/{id}).
+          description: Webhook services only — paste into the provider's webhook settings (PUBLIC_URL + /api/hooks/{id}). Stripe's snapshot and thin destinations both use this one URL.
+        generatedSecret:
+          type: string
+          description: Razorpay webhooks only, in the create or regenerate answer only — the signing secret cb generated, to paste into Razorpay once. Never returned again.
       required:
         - id
         - environmentId
@@ -4960,19 +5047,28 @@ components:
           type: integer
           minimum: 1
           maximum: 65535
-          description: Default app port when the developer's run does not tell the agent one.
+          description: Deprecated — the agent detects the port the app listens on. Last fallback only.
         signingSecret:
           type: string
           minLength: 8
           maxLength: 500
           writeOnly: true
-          description: Real signing secret (Stripe whsec_…, Razorpay webhook secret).
+          description: Real signing secret (Stripe whsec_…, Razorpay webhook secret). Optional — Stripe gets it from Connect; Razorpay's is generated when left out (returned once as generatedSecret).
+        thinSigningSecret:
+          type: string
+          minLength: 8
+          maxLength: 500
+          writeOnly: true
+          description: Stripe only — the thin-payload destination's signing secret (whsec_…); same cb URL.
+        thinPath:
+          type: string
+          maxLength: 300
+          description: Stripe only — path for thin events when the app has a separate route (default path).
       required:
         - kind
         - name
         - provider
         - path
-        - signingSecret
     CreateResourceBody:
       oneOf:
         - $ref: "#/components/schemas/CreatePostgresResource"
@@ -5014,6 +5110,20 @@ components:
           maxLength: 500
           writeOnly: true
           description: Webhook services — replace the real signing secret (device fakes stay the same).
+        thinSigningSecret:
+          type: string
+          minLength: 8
+          maxLength: 500
+          writeOnly: true
+          description: Stripe webhooks — set or replace the thin destination's signing secret (the other secret is kept).
+        thinPath:
+          type: [string, "null"]
+          maxLength: 300
+          description: Stripe webhooks — path for thin events; null sends them to path again.
+        regenerateSecret:
+          type: boolean
+          const: true
+          description: Razorpay webhooks — replace the signing secret with a new generated one (returned once as generatedSecret).
         path:
           type: string
           maxLength: 300

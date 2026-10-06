@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
+import type http from "node:http";
 import https from "node:https";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
@@ -27,8 +28,17 @@ export async function startMockPayments(opts: {
   const caFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cb-pay-ca-")), "ca.pem");
   fs.writeFileSync(caFile, ca.certPem);
   const basic = `Basic ${Buffer.from(`${opts.razorpayKeyId}:${opts.razorpaySecret}`).toString("base64")}`;
+  /** Stripe webhook endpoints created through the API (Connect Stripe), by id. */
+  const endpoints = new Map<string, { url: string; secret: string; events: string[] }>();
+  let omitSecret = false;
   const server = https.createServer({ cert: leaf.certPem, key: leaf.keyPem }, (req, res) => {
-    req.resume();
+    let raw = "";
+    req.on("data", (c) => {
+      raw += c;
+    });
+    req.on("end", () => handle(req, res, raw));
+  });
+  const handle = (req: http.IncomingMessage, res: http.ServerResponse, raw: string) => {
     // Like the real APIs: compressed when the client accepts it (the gateway must still learn the ids).
     const gzip = /\bgzip\b/.test(String(req.headers["accept-encoding"] ?? ""));
     const send = (status: number, body: unknown) => {
@@ -40,6 +50,35 @@ export async function startMockPayments(opts: {
       res.end(gzip ? zlib.gzipSync(text) : text);
     };
     const url = req.url ?? "";
+    if (url.startsWith("/v1/webhook_endpoints")) {
+      if (req.headers.authorization !== `Bearer ${opts.stripeKey}`)
+        return send(401, { error: { type: "invalid_request_error", message: "Invalid API Key provided" } });
+      const form = new URLSearchParams(raw);
+      const existing = /^\/v1\/webhook_endpoints\/(we_[A-Za-z0-9]+)$/.exec(url)?.[1];
+      if (existing) {
+        const e = endpoints.get(existing);
+        if (!e)
+          return send(404, { error: { code: "resource_missing", message: "No such webhook endpoint" } });
+        e.url = form.get("url") ?? e.url;
+        return send(200, { id: existing, object: "webhook_endpoint", url: e.url });
+      }
+      const id = `we_${rand()}`;
+      const e = {
+        url: form.get("url") ?? "",
+        secret: `whsec_${rand()}${rand()}`,
+        events: form.getAll("enabled_events[]"),
+      };
+      endpoints.set(id, e);
+      const omitted = omitSecret;
+      omitSecret = false;
+      return send(200, {
+        id,
+        object: "webhook_endpoint",
+        url: e.url,
+        enabled_events: e.events,
+        secret: omitted ? undefined : e.secret,
+      });
+    }
     if (url.startsWith("/v1/payment_intents")) {
       if (req.headers.authorization !== `Bearer ${opts.stripeKey}`)
         return send(401, { error: { type: "auth" } });
@@ -58,11 +97,16 @@ export async function startMockPayments(opts: {
       return send(200, { id: `order_${rand()}`, entity: "order", status: "created" });
     }
     send(404, { error: "not found" });
-  });
+  };
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   return {
     url: `https://localhost:${(server.address() as AddressInfo).port}`,
     caFile,
+    endpoints,
+    /** The next endpoint create answers without `secret` (a malformed provider answer). */
+    omitSecretOnce: () => {
+      omitSecret = true;
+    },
     close: () => server.close(),
   };
 }

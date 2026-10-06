@@ -32,6 +32,10 @@ export function fakeApiKey(scope: FakeScope, prefix: string): string {
   return `${prefix}${alnum(secret(), ["fake", scope.deviceId, scope.environmentId, scope.resourceId, "key"], 40)}`;
 }
 
+/** Fake scope of a webhook's thin-events key (STRIPE_THIN_WEBHOOK_SECRET-style): its own value per device. */
+export const thinFakeResource = (resourceId: string, thin = true) =>
+  thin ? `${resourceId}:thin` : resourceId;
+
 /** @deprecated name kept for the redis adapter. */
 export const fakeRedisCredentials = fakeDbCredentials;
 

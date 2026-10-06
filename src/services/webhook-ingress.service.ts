@@ -7,6 +7,7 @@ import { logger } from "../logger/logger.js";
 import { ResourceModel } from "../models/resource.model.js";
 import { WebhookEventModel } from "../models/webhook-event.model.js";
 import { eventTargets, idsFromEvent } from "../webhooks/routing.js";
+import { isThinEvent, parseWebhookSecrets, secretsToTry } from "../webhooks/secrets.js";
 import { eventIdOf, type HeaderMap, verifyWebhook, type WebhookProvider } from "../webhooks/signing.js";
 import { readResourceSecret } from "./resource-secret.service.js";
 import { nextRouteAt, routeEvent, WEBHOOK_RETENTION_MS } from "./webhook-delivery.service.js";
@@ -65,15 +66,6 @@ export async function ingestWebhook(
   const config = (service?.config ?? {}) as { provider?: unknown };
   if (!service || !isWebhookProvider(config.provider)) throw notFound();
   const provider: WebhookProvider = config.provider;
-  const real = await readResourceSecret(service._id);
-  if (!verifyWebhook(provider, real, body, headers)) {
-    allow(failed, callerIp, MAX_FAILED_PER_IP_SECOND);
-    throw new AppError("WEBHOOK_SIGNATURE_INVALID", {
-      message: "Signature does not match this endpoint's signing secret.",
-    });
-  }
-  if (!allow(verified, serviceId, MAX_VERIFIED_PER_SECOND)) throw tooMany();
-
   let json: Record<string, unknown> = {};
   try {
     const parsed = JSON.parse(body.toString("utf8")) as unknown;
@@ -82,6 +74,16 @@ export async function ingestWebhook(
   } catch {
     // Signed but not JSON: delivered as-is, just never routed by object id.
   }
+  // One cb URL serves Stripe's snapshot and thin destinations; each signs with its own secret.
+  const thin = provider === "stripe" && isThinEvent(json);
+  const secrets = secretsToTry(parseWebhookSecrets(await readResourceSecret(service._id)), thin);
+  if (!secrets.some((secret) => verifyWebhook(provider, secret, body, headers))) {
+    allow(failed, callerIp, MAX_FAILED_PER_IP_SECOND);
+    throw new AppError("WEBHOOK_SIGNATURE_INVALID", {
+      message: "Signature does not match this endpoint's signing secret.",
+    });
+  }
+  if (!allow(verified, serviceId, MAX_VERIFIED_PER_SECOND)) throw tooMany();
   const eventId = eventIdOf(provider, body, headers);
   const type = String((provider === "stripe" ? json.type : json.event) ?? "");
   const receivedAt = new Date();
@@ -92,6 +94,7 @@ export async function ingestWebhook(
     provider,
     eventId,
     type: type.slice(0, 120),
+    thin,
     passHeaders: headers["x-razorpay-event-id"]
       ? { "x-razorpay-event-id": headers["x-razorpay-event-id"] }
       : {},
