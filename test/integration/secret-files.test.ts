@@ -195,14 +195,12 @@ describe("nothing left behind on bulk delete or failure (I4, Y5)", () => {
       connectionUri: "mysql://u:REAL_PW_FS_9@db.example.com:1/app",
       caCert: ca.certPem,
     });
-    await mongoose.connection.db
-      ?.collection("fakekeys")
-      .insertOne({
-        resourceId: new Types.ObjectId(),
-        deviceId: new Types.ObjectId(),
-        publicPem: "x",
-        privateKey: {},
-      });
+    await mongoose.connection.db?.collection("fakekeys").insertOne({
+      resourceId: new Types.ObjectId(),
+      deviceId: new Types.ObjectId(),
+      publicPem: "x",
+      privateKey: {},
+    });
     const resIds = (await ResourceModel.find({}).lean()).map((r) => r._id);
     await mongoose.connection.db?.collection("fakekeys").updateMany({}, { $set: { resourceId: resIds[0] } });
     expect((await counts()).files).toBe(2);
