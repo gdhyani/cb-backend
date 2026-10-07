@@ -108,6 +108,31 @@ describe("FILE_STORE env (B10)", () => {
   });
 });
 
+describe("SUPABASE_URL must be https (M5, S1)", () => {
+  const withUrl = (url: string) =>
+    loadEnv({
+      ...testEnvVars("mongodb://x"),
+      FILE_STORE: "supabase",
+      SUPABASE_URL: url,
+      SUPABASE_SECRET_KEY: KEY,
+    });
+
+  it("M5 plain http to a remote host is refused, naming SUPABASE_URL", () => {
+    expect(() => withUrl("http://proj.supabase.co")).toThrow(/SUPABASE_URL.*https/);
+    expect(() => withUrl("http://10.0.0.5:54321")).toThrow(/SUPABASE_URL/);
+  });
+
+  it("M5 https anywhere and http to a loopback host (local tests) are accepted", () => {
+    for (const url of [
+      "https://proj.supabase.co",
+      "http://localhost:54321",
+      "http://127.0.0.1:54321",
+      "http://[::1]:54321",
+    ])
+      expect(withUrl(url).SUPABASE_URL).toBe(url);
+  });
+});
+
 describe("Mongo file store reads every byte form (M3, S1)", () => {
   const stub = (data: unknown) =>
     vi

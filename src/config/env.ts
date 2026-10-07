@@ -32,7 +32,17 @@ const EnvSchema = z.object({
    * `mongo` (default) keeps them in the backend's own database; `supabase` in a private Supabase Storage bucket.
    */
   FILE_STORE: z.enum(["mongo", "supabase"]).default("mongo"),
-  SUPABASE_URL: z.url().optional(),
+  /** M5: https only; plain http is allowed for a loopback host (a local Supabase in tests). */
+  SUPABASE_URL: z
+    .url()
+    .refine((v) => {
+      const u = new URL(v);
+      return (
+        u.protocol === "https:" ||
+        (u.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname))
+      );
+    }, "must be an https:// URL (plain http only for localhost, 127.0.0.1 or [::1])")
+    .optional(),
   SUPABASE_SECRET_KEY: z.string().min(10).optional(),
   SUPABASE_STORAGE_BUCKET: z
     .string()
