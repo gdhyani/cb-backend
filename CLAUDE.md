@@ -169,7 +169,8 @@ export async function getProjectHandler(req: Request, res: Response, next: NextF
 
 `NODE_ENV` · `PORT` (4200) · `LOG_LEVEL` (info) · `MONGODB_URI` · `MASTER_KEY` (32-byte base64) ·
 `SERVER_SECRET` (32-byte base64) · `JWT_SIGNING_KEY` (ES256 PEM) · `PUBLIC_URL` · `DASHBOARD_URL` ·
-`UPSTREAM_EXTRA_CA_FILE` (test only). Each milestone adds only the vars it needs. `.env.example`
+`UPSTREAM_EXTRA_CA_FILE` (test only) · `ALLOW_PRIVATE_HTTP_UPSTREAMS` · `FILE_STORE` (mongo | supabase) ·
+`SUPABASE_URL` (https) · `SUPABASE_SECRET_KEY` · `SUPABASE_STORAGE_BUCKET` (cb-files). Each milestone adds only the vars it needs. `.env.example`
 holds placeholders only.
 
 ## Tools & packages
