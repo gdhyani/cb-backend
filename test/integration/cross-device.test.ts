@@ -231,3 +231,79 @@ describe("FR-GW-001 hostile local input: malformed bytes close one tunnel, never
     l.close();
   });
 });
+
+/** An http service in each environment (and a second one in development); Alice and Bob each have a device. */
+async function scopes() {
+  const app = server.listeners("request")[0] as never;
+  const { owner, orgId } = await signupOwner(app);
+  const project = await owner.post(`/api/orgs/${orgId}/projects`, { name: "Shop" });
+  const envs = project.body.data.environments as { id: string; name: string }[];
+  const dev = envs.find((e) => e.name === "development")?.id as string;
+  const staging = envs.find((e) => e.name === "staging")?.id as string;
+  const api = async (envId: string, name: string, key: string) => {
+    const r = await owner.post(`/api/environments/${envId}/resources`, {
+      kind: "http",
+      name,
+      upstreamUrl: provider.url,
+      apiKey: API_KEY,
+      fakePrefix: "sk_cb_",
+      basePath: "/v1",
+    });
+    if (r.status !== 201) throw new Error(JSON.stringify(r.body));
+    await owner.post(`/api/environments/${envId}/variables`, {
+      type: "brokered",
+      key,
+      resourceId: r.body.data.id,
+      field: "key",
+    });
+    return r.body.data.id as string;
+  };
+  const ids = { devApi: await api(dev, "api", "API_KEY"), devOther: await api(dev, "other", "OTHER_KEY") };
+  const stagingApi = await api(staging, "api", "API_KEY");
+  const people = [];
+  for (const name of ["Alice", "Bob"]) {
+    const m = await addMember(app, owner, orgId, name);
+    for (const envId of [dev, staging])
+      await owner.post(`/api/environments/${envId}/grants`, { userId: m.userId });
+    const { token } = await loginDevice(app, m.member);
+    const boot = async (env: string) =>
+      (await cli(app, token).get(`/api/agent/bootstrap?projectId=${project.body.data.id}&env=${env}`)).body
+        .data.plain as Record<string, string>;
+    people.push({ token, dev: await boot("development"), staging: await boot("staging") });
+  }
+  return { dev, staging, ids: { ...ids, stagingApi }, alice: people[0], bob: people[1] };
+}
+
+async function through(token: string, env: string, resource: string, key: string) {
+  const listener = await localListener(base, token, { layer: "1", env, resource });
+  const res = await fetch(`http://127.0.0.1:${listener.port}/v1/models`, {
+    headers: { authorization: `Bearer ${key}` },
+  });
+  const body = await res.text();
+  listener.close();
+  return { status: res.status, body };
+}
+
+describe("S7 stand-ins are bound to environment, user and service (M9, Z4, Z5)", () => {
+  it("Z4 S7 a development stand-in is refused on staging", async () => {
+    const s = await scopes();
+    const own = await through(s.alice.token, s.staging, s.ids.stagingApi, s.alice.staging.API_KEY ?? "");
+    expect(own.status).toBe(200);
+    const crossed = await through(s.alice.token, s.staging, s.ids.stagingApi, s.alice.dev.API_KEY ?? "");
+    expect(crossed.status).toBe(401);
+    expect(crossed.body).not.toContain(API_KEY);
+  });
+
+  it("Z5 S7 another user's stand-in is refused on my device", async () => {
+    const s = await scopes();
+    expect(s.alice.dev.API_KEY).not.toBe(s.bob.dev.API_KEY);
+    const crossed = await through(s.bob.token, s.dev, s.ids.devApi, s.alice.dev.API_KEY ?? "");
+    expect(crossed.status).toBe(401);
+  });
+
+  it("S7 a stand-in for one service is refused by another service of the same kind", async () => {
+    const s = await scopes();
+    const crossed = await through(s.alice.token, s.dev, s.ids.devOther, s.alice.dev.API_KEY ?? "");
+    expect(crossed.status).toBe(401);
+  });
+});

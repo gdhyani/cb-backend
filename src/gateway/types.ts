@@ -9,7 +9,14 @@ export interface TunnelContext {
   environmentId: string;
   projectId: string;
   orgId: string;
-  resource: { id: string; kind: ResourceKind; name: string; config: Record<string, unknown> };
+  resource: {
+    id: string;
+    kind: ResourceKind;
+    name: string;
+    config: Record<string, unknown>;
+    /** The resource's `rotatedAt` when the key was read: key-health reports about a replaced key are dropped (M1). */
+    keyVersion?: string | null;
+  };
   /** Real credential, decrypted for this tunnel only (FR-GW-005). Never logged. */
   secret: string;
   /** Credential profile the secret came from (J2); a changed assignment closes the tunnel. */

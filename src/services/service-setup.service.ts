@@ -13,8 +13,10 @@ import {
   configAndSecret,
   createResource,
   MAIN_FIELD,
+  purgeResources,
   type ResourceDto,
 } from "./resource.service.js";
+import { markHealth } from "./resource-health.service.js";
 import { runDraftTest } from "./resource-test.service.js";
 import { createVariable, type VariableDto } from "./variable.service.js";
 
@@ -96,6 +98,11 @@ export async function createService(
   }
 
   const service = await createResource(actorId, envId, parsed, { touch: false });
+  // B11: a passing Save & test is the first proof the provider accepts the key.
+  if (test?.ok) {
+    await markHealth(service.id, { status: "ok" });
+    service.health = { status: "ok", reason: null, checkedAt: new Date().toISOString() };
+  }
   try {
     const variables: VariableDto[] = [
       await createVariable(
@@ -121,7 +128,7 @@ export async function createService(
   } catch (err) {
     // No Mongo transactions here: undo what this request created, then report the original error.
     await VariableModel.deleteMany({ resourceId: service.id });
-    await ResourceModel.deleteOne({ _id: service.id });
+    await purgeResources({ _id: service.id });
     throw err;
   }
 }

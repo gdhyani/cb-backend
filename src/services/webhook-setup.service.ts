@@ -14,6 +14,7 @@ import { recordAudit } from "./audit.service.js";
 import { touchEnvironment } from "./environment.service.js";
 import { type ResourceDto, toResourceDto, webhookUrlOf } from "./resource.service.js";
 import { readResourceSecret } from "./resource-secret.service.js";
+import { withCaCert } from "./secret-file.service.js";
 
 /**
  * FR-WH-001 Connect: with the provider's API key already stored in the same environment, cb creates (or points again)
@@ -127,7 +128,12 @@ async function providerKey(environmentId: Types.ObjectId, provider: "stripe" | "
         ? "Add your Stripe secret key (type Stripe) in this environment first; cb uses it to create the webhook in Stripe."
         : "Add your Razorpay key (type Razorpay) in this environment first; cb uses it to create the webhook in Razorpay.",
     );
-  const config = (key.config ?? {}) as { upstreamUrl?: string; caCert?: unknown; basicUser?: string };
+  // I3: a CA kept in the file store comes back into config (memory only) for the provider call.
+  const config = ((await withCaCert(key)).config ?? {}) as {
+    upstreamUrl?: string;
+    caCert?: unknown;
+    basicUser?: string;
+  };
   return { secret: await readResourceSecret(key._id), config };
 }
 

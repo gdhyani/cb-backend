@@ -1,13 +1,15 @@
-import { randomBytes, X509Certificate } from "node:crypto";
-import type { Types } from "mongoose";
+import { createPrivateKey, randomBytes, X509Certificate } from "node:crypto";
+import { Types } from "mongoose";
 import { z } from "zod";
 import { getEnv } from "../config/env.js";
 import { encryptSecret } from "../crypto/envelope.js";
 import { AppError } from "../errors/app-error.js";
 import { bus } from "../events/bus.js";
 import { CredentialProfileModel } from "../models/credential-profile.model.js";
+import { FakeKeyModel } from "../models/fake-key.model.js";
 import { GrantModel } from "../models/grant.model.js";
 import { type ResourceKind, ResourceModel } from "../models/resource.model.js";
+import { TokenSwapModel } from "../models/token-swap.model.js";
 import { VariableModel } from "../models/variable.model.js";
 import {
   type MongoTarget,
@@ -25,6 +27,16 @@ import { loadEnvironment, requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { touchEnvironment } from "./environment.service.js";
 import { readResourceSecret } from "./resource-secret.service.js";
+import {
+  type CaFileRef,
+  caCertInfo,
+  type FileRef,
+  removeSecretFiles,
+  sameFile,
+  saveCaFile,
+  saveSecretFile,
+  withCaCert,
+} from "./secret-file.service.js";
 
 /** Which variable fields each resource kind can broker. */
 export const BROKERED_FIELDS: Record<ResourceKind, readonly string[]> = {
@@ -60,12 +72,27 @@ export const MAIN_FIELD: Record<ResourceKind, string> = {
 const GOOGLE_DEFAULT_HOSTS = ["oauth2.googleapis.com:443", "fcm.googleapis.com:443"];
 const APNS_DEFAULT_HOSTS = ["api.push.apple.com:443", "api.sandbox.push.apple.com:443"];
 const HttpsUrl = HttpsOnlyUrl;
-const PemPrivateKey = z.string().refine((k) => k.includes("PRIVATE KEY-----"), "must be a PEM private key");
+/** Uploaded files arrive as saved on any OS: drop a BOM, use LF line endings, trim (then validate). */
+const normalizeFile = (s: string) =>
+  s
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n?/g, "\n")
+    .trim();
+
+const PemPrivateKey = z
+  .string()
+  .transform(normalizeFile)
+  .refine((k) => k.includes("PRIVATE KEY-----"), "must be a PEM private key");
 
 /** Public CA certificate(s) a self-hosted or private-CA database presents; trusted for that resource only. */
 const PemCertificates = z
   .string()
   .max(32_000)
+  .transform(normalizeFile)
+  .refine(
+    (pem) => !pem.includes("PRIVATE KEY-----"),
+    "this is a private key — use the provider's CA certificate (ca.pem)",
+  )
   .refine((pem) => {
     const blocks = pem.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? [];
     if (blocks.length === 0) return false;
@@ -78,18 +105,32 @@ const PemCertificates = z
   }, "must be one or more PEM certificates (-----BEGIN CERTIFICATE-----)");
 
 /** A Google service-account JSON key file (Firebase Admin). */
-const ServiceAccountJson = z.string().refine((raw) => {
-  try {
-    const sa = JSON.parse(raw) as Record<string, unknown>;
-    return (
-      typeof sa.client_email === "string" &&
-      typeof sa.private_key === "string" &&
-      typeof sa.project_id === "string"
-    );
-  } catch {
-    return false;
-  }
-}, "must be a service-account JSON key with project_id, client_email and private_key");
+const ServiceAccountJson = z
+  .string()
+  .transform(normalizeFile)
+  .superRefine((raw, ctx) => {
+    // Messages name the problem, never the content (B4).
+    const fail = (message: string) => ctx.addIssue({ code: "custom", message });
+    let sa: Record<string, unknown>;
+    try {
+      sa = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return fail(
+        raw.includes("BEGIN CERTIFICATE")
+          ? "this is a certificate, not a service-account key file"
+          : "not a JSON file — download the key from Firebase → Project settings → Service accounts",
+      );
+    }
+    if (sa.type !== undefined && sa.type !== "service_account")
+      return fail("this JSON is not a service-account key (its type is not service_account)");
+    for (const field of ["project_id", "client_email", "private_key"])
+      if (typeof sa[field] !== "string" || !sa[field]) return fail(`the key file has no ${field}`);
+    try {
+      createPrivateKey(String(sa.private_key));
+    } catch {
+      fail("the key file's private_key is not a valid private key");
+    }
+  });
 
 const HostPort = z.string().regex(/^[a-z0-9.-]+:\d{1,5}$/i, "use host:port, e.g. api.stripe.com:443");
 const Name = z.string().trim().min(1).max(60);
@@ -337,6 +378,8 @@ export interface ResourceDto {
   credentialsSet: boolean;
   rotatedAt: string | null;
   disabled: boolean;
+  /** B11: green when the provider accepts the key, rejected ("Expired") when it refused it. */
+  health: { status: "ok" | "rejected" | "unknown"; reason: string | null; checkedAt: string | null };
   brokeredFields: readonly string[];
   createdAt: string;
   /** Webhook services: the URL to paste into the provider's webhook settings (FR-WH-001). */
@@ -365,6 +408,7 @@ export function toResourceDto(r: {
   rotatedAt?: Date | null;
   disabledAt?: Date | null;
   createdAt?: Date;
+  health?: { status?: string | null; reason?: string | null; checkedAt?: Date | null } | null;
 }): ResourceDto {
   const kind = r.kind as ResourceKind;
   return {
@@ -372,14 +416,53 @@ export function toResourceDto(r: {
     environmentId: r.environmentId.toHexString(),
     kind,
     name: r.name,
-    config: (r.config as Record<string, unknown>) ?? {},
+    config: publicConfig((r.config as Record<string, unknown>) ?? {}),
     credentialsSet: true,
     rotatedAt: r.rotatedAt?.toISOString() ?? null,
     disabled: Boolean(r.disabledAt),
+    health: {
+      status: (r.health?.status as ResourceDto["health"]["status"]) ?? "unknown",
+      reason: r.health?.reason ?? null,
+      checkedAt: r.health?.checkedAt?.toISOString() ?? null,
+    },
     brokeredFields: BROKERED_FIELDS[kind],
     createdAt: (r.createdAt ?? new Date()).toISOString(),
     ...(kind === "webhook" ? { webhookUrl: webhookUrlOf(r._id.toHexString()) } : {}),
   };
+}
+
+/** Kinds whose secret is an uploaded file, kept in the file store (B10). */
+const FILE_KINDS = new Set<ResourceKind>(["google-sa", "apns"]);
+
+/**
+ * What admins see of a CA: whose it is and until when — never the PEM or where it is stored. A row from before the
+ * file-store migration still holds the PEM inline; it gets the same shape, derived from the PEM (M6).
+ */
+function publicConfig(config: Record<string, unknown>): Record<string, unknown> {
+  const { caCertFile, caCert, ...rest } = config;
+  const ref = caCertFile as CaFileRef | undefined;
+  if (ref) return { ...rest, caCertFile: { subject: ref.subject, notAfter: ref.notAfter, size: ref.size } };
+  if (typeof caCert === "string" && caCert) {
+    try {
+      return { ...rest, caCertFile: { ...caCertInfo(caCert), size: Buffer.byteLength(caCert) } };
+    } catch {
+      return rest; // unreadable: show nothing rather than echo it
+    }
+  }
+  return rest;
+}
+
+/** Moves an inline `caCert` into the file store; keeps the stored object when the same CA is sent again. */
+async function storeCa(
+  orgId: Types.ObjectId,
+  resourceId: Types.ObjectId,
+  config: Record<string, unknown>,
+  previous?: CaFileRef,
+): Promise<{ config: Record<string, unknown>; stale?: FileRef }> {
+  const { caCert, caCertFile: _old, ...rest } = config;
+  if (typeof caCert !== "string" || !caCert) return { config: rest, stale: previous };
+  if (previous && sameFile(previous, caCert)) return { config: { ...rest, caCertFile: previous } };
+  return { config: { ...rest, caCertFile: await saveCaFile(orgId, resourceId, caCert) }, stale: previous };
 }
 
 /** Which signing secrets a webhook service has (shown to admins; the values never are). */
@@ -592,15 +675,25 @@ export async function createResource(
     secret = serializeWebhookSecrets(secrets);
   }
   if (!secret) throw new AppError("VALIDATION_FAILED", { message: "Credentials are required." });
+  const _id = new Types.ObjectId();
+  const stored = await storeCa(env.orgId, _id, config as Record<string, unknown>);
+  const credentialsFile = FILE_KINDS.has(input.kind)
+    ? await saveSecretFile(env.orgId, _id, "credentials", secret)
+    : undefined;
   const resource = await ResourceModel.create({
+    _id,
     orgId: env.orgId,
     projectId: env.projectId,
     environmentId: envId,
     kind: input.kind,
     name: input.name,
-    config,
-    credentials: encryptSecret(masterKey(), secret),
+    config: stored.config,
+    ...(credentialsFile ? { credentialsFile } : { credentials: encryptSecret(masterKey(), secret) }),
     rotatedAt: new Date(),
+  }).catch(async (err: unknown) => {
+    // I4: a refused create (e.g. a duplicate-name race on the unique index) leaves no stored file behind.
+    await removeSecretFiles([credentialsFile, stored.config.caCertFile as FileRef | undefined]);
+    throw err;
   });
   if (opts.touch !== false) await touchEnvironment(envId);
   await recordAudit({
@@ -629,7 +722,10 @@ export async function updateResource(
 ): Promise<ResourceDto> {
   const resource = await loadResource(actorId, resourceId, "admin");
   const kind = resource.kind as ResourceKind;
-  const current = (resource.config ?? {}) as Record<string, unknown>;
+  const previousCa = (resource.config as Record<string, unknown> | undefined)?.caCertFile as
+    | CaFileRef
+    | undefined;
+  const current = (await withCaCert(resource)).config as Record<string, unknown>;
   const { config: merged, secret: given } = configAndSecret(kind, input, current);
   let config = merged as Record<string, unknown>;
   let secret = given;
@@ -699,22 +795,47 @@ export async function updateResource(
         },
       ],
     });
+  let tested = false;
   if (input.test) {
     const candidate = secret ?? (await readResourceSecret(resourceId));
     // Loaded lazily: resource-test → profile → resource would otherwise be a load-order-dependent cycle.
     const { runDraftTest } = await import("./resource-test.service.js");
     const result = await runDraftTest(kind, candidate, config);
     if (!result.ok) throw new AppError("SERVICE_TEST_FAILED", { message: result.message });
+    tested = true;
   }
-  const update: Record<string, unknown> = { config };
+  // Only after a passing test: a refused change must leave no new object in the file store.
+  const stored = await storeCa(resource.orgId, resourceId, config, previousCa);
+  const update: Record<string, unknown> = { config: stored.config };
+  if (tested) update.health = { status: "ok", reason: null, checkedAt: new Date() };
+  else if (secret) update.health = { status: "unknown", reason: null, checkedAt: null };
+  const stale: (FileRef | undefined)[] = [stored.stale];
   if (input.name) update.name = input.name;
-  if (secret)
+  if (secret && FILE_KINDS.has(kind)) {
+    const old = await ResourceModel.findById(resourceId).select("+credentialsFile").lean();
+    stale.push(old?.credentialsFile as FileRef | undefined);
+    Object.assign(update, {
+      credentialsFile: await saveSecretFile(resource.orgId, resourceId, "credentials", secret),
+      $unset: { credentials: 1 },
+      rotatedAt: new Date(),
+    });
+  } else if (secret)
     Object.assign(update, { credentials: encryptSecret(masterKey(), secret), rotatedAt: new Date() });
   if (input.disabled !== undefined) update.disabledAt = input.disabled ? new Date() : null;
+  const fresh = [
+    update.credentialsFile as FileRef | undefined,
+    stored.config.caCertFile !== previousCa ? (stored.config.caCertFile as FileRef | undefined) : undefined,
+  ];
   const updated = await ResourceModel.findByIdAndUpdate(resourceId, update, {
     returnDocument: "after",
-  }).lean();
+  })
+    .lean()
+    .catch(async (err: unknown) => {
+      await removeSecretFiles(fresh); // I4: a failed update leaves no new object
+      throw err;
+    });
   if (!updated) throw new AppError("NOT_FOUND", { message: "Resource not found." });
+  await removeSecretFiles(stale);
   if (input.disabled === true)
     bus.publish({
       type: "access.revoked",
@@ -735,6 +856,28 @@ export async function updateResource(
   return { ...toResourceDto(updated), ...(generatedSecret ? { generatedSecret } : {}) };
 }
 
+/**
+ * Y5 / I4: removes services and everything that only exists for them — credential profiles, devices' fake keys,
+ * swapped Google tokens and stored files. Every delete path (one service, an environment, a project, a rollback) uses it.
+ */
+export async function purgeResources(filter: Record<string, unknown>): Promise<void> {
+  const rows = await ResourceModel.find(filter).select("+credentialsFile").lean();
+  if (rows.length === 0) return;
+  const ids = rows.map((r) => r._id);
+  await Promise.all([
+    CredentialProfileModel.deleteMany({ resourceId: { $in: ids } }),
+    FakeKeyModel.deleteMany({ resourceId: { $in: ids } }),
+    TokenSwapModel.deleteMany({ resourceId: { $in: ids } }),
+  ]);
+  await ResourceModel.deleteMany({ _id: { $in: ids } });
+  await removeSecretFiles(
+    rows.flatMap((r) => [
+      r.credentialsFile as FileRef | undefined,
+      (r.config as Record<string, unknown> | undefined)?.caCertFile as FileRef | undefined,
+    ]),
+  );
+}
+
 export async function deleteResource(actorId: string, resourceId: Types.ObjectId): Promise<void> {
   const resource = await loadResource(actorId, resourceId, "admin");
   if (resource.kind === "webhook") {
@@ -743,8 +886,7 @@ export async function deleteResource(actorId: string, resourceId: Types.ObjectId
     await disconnectWebhook(resource);
   }
   await VariableModel.deleteMany({ resourceId });
-  await CredentialProfileModel.deleteMany({ resourceId });
-  await ResourceModel.deleteOne({ _id: resourceId });
+  await purgeResources({ _id: resourceId });
   await GrantModel.updateMany(
     { "resourceProfiles.resourceId": resourceId },
     { $pull: { resourceProfiles: { resourceId } } },

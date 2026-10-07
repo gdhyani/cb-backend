@@ -14,6 +14,10 @@ npm run dev                 # nodemon, http://localhost:4200
 curl localhost:4200/api/health
 ```
 
+Uploaded key files and CA certificates are stored encrypted in MongoDB by default. To keep them in a private
+Supabase Storage bucket instead, set `FILE_STORE=supabase`, `SUPABASE_URL` (https) and `SUPABASE_SECRET_KEY`
+(optionally `SUPABASE_STORAGE_BUCKET`, default `cb-files`).
+
 ## Scripts
 
 | Script | What it does |
@@ -22,6 +26,8 @@ curl localhost:4200/api/health
 | `npm run build` / `npm start` | Compile to `dist/` / run the compiled server |
 | `npm test` | Unit + integration tests (in-memory MongoDB) |
 | `npm run typecheck` / `npm run lint` | TypeScript / Biome |
+| `npm run migrate:file-store [-- --apply]` | Move inline key files and CA certificates into the file store (dry run without `--apply`) |
+| `npm run migrate:unified-variables [-- --apply]` | One-time move of older resources to Unified Variables (dry run without `--apply`) |
 
 ## Test services
 

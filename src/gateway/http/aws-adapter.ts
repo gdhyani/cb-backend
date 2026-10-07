@@ -8,6 +8,8 @@ import { safeEqual } from "../../crypto/safe-equal.js";
 import { logger } from "../../logger/logger.js";
 import { recordAudit } from "../../services/audit.service.js";
 import { fakeAwsKeys } from "../../services/fakes.service.js";
+import { DEFAULT_PROFILE } from "../../services/profile.service.js";
+import { healthTap } from "../../services/resource-health.service.js";
 import { upstreamAllowed } from "../../utils/upstream-url.js";
 import type { TunnelContext } from "../types.js";
 import {
@@ -17,7 +19,7 @@ import {
   HOP_BY_HOP,
   sendJson,
 } from "./http-adapter.js";
-import { createRedactor } from "./redaction.js";
+import { createRedactor, decoded, redactHeaders } from "./redaction.js";
 import { upstreamDispatcher } from "./upstream.js";
 
 export interface AwsResourceConfig {
@@ -164,12 +166,22 @@ export function createAwsHandler(ctx: TunnelContext): Handler {
           if (!HOP_BY_HOP.has(k) && v !== undefined) out[k] = v;
         if (up.headers["content-length"] !== undefined && method === "HEAD")
           out["content-length"] = String(up.headers["content-length"]);
-        (res as import("node:http").ServerResponse).writeHead(up.statusCode, out);
-        await pipeline(
-          up.body,
-          createRedactor(real.secretAccessKey),
-          res as unknown as NodeJS.WritableStream,
+        // C1: error bodies (where AWS quotes keys) are decoded before redaction; object downloads stay byte-exact.
+        const plain = up.statusCode >= 400 ? decoded(up.body, out) : { body: up.body, headers: out };
+        (res as import("node:http").ServerResponse).writeHead(
+          up.statusCode,
+          redactHeaders(plain.headers, [real.secretAccessKey, real.accessKeyId]),
         );
+        const tap =
+          ctx.profile === DEFAULT_PROFILE
+            ? healthTap("aws", up.statusCode, ctx.resource.id, ctx.resource.keyVersion)
+            : undefined;
+        await pipeline([
+          plain.body,
+          createRedactor([real.secretAccessKey, real.accessKeyId]),
+          ...(tap ? [tap] : []),
+          res as unknown as NodeJS.WritableStream,
+        ]);
         void recordAudit({
           orgId: ctx.orgId,
           actorId: ctx.userId,

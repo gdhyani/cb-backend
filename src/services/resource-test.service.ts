@@ -19,7 +19,9 @@ import { parseWebhookSecrets } from "../webhooks/secrets.js";
 import { requireMembership } from "./access.service.js";
 import { recordAudit } from "./audit.service.js";
 import { DEFAULT_PROFILE, readProfileSecret } from "./profile.service.js";
+import { healthFromTest, markHealth } from "./resource-health.service.js";
 import { readResourceSecret } from "./resource-secret.service.js";
+import { withCaCert } from "./secret-file.service.js";
 
 const TIMEOUT_MS = 8000;
 
@@ -398,6 +400,33 @@ export function awsServiceOf(config: Record<string, unknown>): "s3" | "ses" | "s
   return "s3";
 }
 
+export const PRIVATE_CA_HINT =
+  "The server's certificate is signed by a private CA (Aiven, DigitalOcean, self-hosted). Add the provider's CA certificate under Advanced → CA certificate.";
+
+const UNTRUSTED_CERT = new Set([
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+]);
+const DB_KINDS = new Set<ResourceKind>(["mysql", "postgres", "mongodb", "redis", "smtp"]);
+
+/** A database refused only because its CA is unknown: tell the admin what to add (no CA set yet). */
+export function privateCaHint(
+  kind: ResourceKind,
+  config: Record<string, unknown>,
+  err: unknown,
+): string | undefined {
+  if (!DB_KINDS.has(kind) || config.caCert) return undefined;
+  for (
+    let e = err as { code?: unknown; cause?: unknown } | undefined, i = 0;
+    e && i < 5;
+    e = e.cause as typeof e, i++
+  )
+    if (typeof e.code === "string" && UNTRUSTED_CERT.has(e.code)) return PRIVATE_CA_HINT;
+  return undefined;
+}
+
 /** J2: test credentials that are not saved yet (Save & test, Replace value). No DB access, no audit. */
 export async function runDraftTest(
   kind: ResourceKind,
@@ -409,7 +438,8 @@ export async function runDraftTest(
   try {
     outcome = await withTimeout(testers[kind](secret, config), "Connection test");
   } catch (err) {
-    outcome = { ok: false, message: err instanceof Error ? err.message : String(err) };
+    const hint = privateCaHint(kind, config, err);
+    outcome = { ok: false, message: hint ?? (err instanceof Error ? err.message : String(err)) };
   }
   return { ok: outcome.ok, latencyMs: Date.now() - started, message: scrub(outcome.message, secret) };
 }
@@ -431,9 +461,12 @@ export async function testResource(
   const draft = await runDraftTest(
     resource.kind as ResourceKind,
     secret,
-    (resource.config as Record<string, unknown>) ?? {},
+    ((await withCaCert(resource)).config as Record<string, unknown>) ?? {},
   );
   const result: ResourceTestDto = { ...draft, profile };
+  // B11: only the default credentials decide the key's status shown in the table.
+  if (profile === DEFAULT_PROFILE)
+    await markHealth(resource._id, healthFromTest(draft), resource.rotatedAt ?? null);
   await recordAudit({
     orgId: resource.orgId,
     actorId,

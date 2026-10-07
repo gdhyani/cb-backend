@@ -9,11 +9,13 @@ import type { LeafCache } from "../../crypto/ca.js";
 import { safeEqual } from "../../crypto/safe-equal.js";
 import { recordAudit } from "../../services/audit.service.js";
 import { fakeApiKey } from "../../services/fakes.service.js";
+import { DEFAULT_PROFILE } from "../../services/profile.service.js";
+import { healthTap } from "../../services/resource-health.service.js";
 import { learnFromResponse, paymentProviderOf } from "../../services/webhook-owner.service.js";
 import { upstreamAllowed } from "../../utils/upstream-url.js";
 import { asSocketLike } from "../socket-like.js";
 import type { StreamAdapter, TunnelContext } from "../types.js";
-import { createRedactor } from "./redaction.js";
+import { createRedactor, decoded, injectedBasic, redactHeaders } from "./redaction.js";
 import { upstreamDispatcher } from "./upstream.js";
 
 export type AuthScheme = "bearer" | "x-api-key" | "basic-password" | "header";
@@ -85,6 +87,8 @@ export const HOP_BY_HOP = new Set([
   "upgrade",
   "host",
   "content-length",
+  // C1: never ask providers for compressed bodies — redaction must see plain bytes.
+  "accept-encoding",
 ]);
 
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
@@ -194,7 +198,9 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
         const out: Record<string, string | string[]> = {};
         for (const [k, v] of Object.entries(up.headers))
           if (!HOP_BY_HOP.has(k) && v !== undefined) out[k] = v;
-        (res as http.ServerResponse).writeHead(up.statusCode, out);
+        const plain = decoded(up.body, out);
+        const secrets = [ctx.secret, ...injectedBasic(outHeaders.authorization)];
+        (res as http.ServerResponse).writeHead(up.statusCode, redactHeaders(plain.headers, secrets));
         const provider = paymentProviderOf(config);
         const learn =
           method === "POST" && provider && up.statusCode >= 200 && up.statusCode < 300
@@ -211,14 +217,17 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
                     up.statusCode,
                     body,
                   ),
-                typeof up.headers["content-encoding"] === "string"
-                  ? up.headers["content-encoding"]
-                  : undefined,
+                undefined, // decoded above
               )
             : undefined;
-        await (learn
-          ? pipeline(up.body, createRedactor(ctx.secret), learn, res as unknown as NodeJS.WritableStream)
-          : pipeline(up.body, createRedactor(ctx.secret), res as unknown as NodeJS.WritableStream));
+        // B11: what the provider said about the key (2xx ok, 401 rejected …), recorded without delaying the app.
+        // I2: only a request that carried the stored default key says anything about that key.
+        const tap =
+          own && ctx.profile === DEFAULT_PROFILE
+            ? healthTap("http", up.statusCode, ctx.resource.id, ctx.resource.keyVersion)
+            : undefined;
+        const steps = [createRedactor(secrets), ...(learn ? [learn] : []), ...(tap ? [tap] : [])];
+        await pipeline([plain.body, ...steps, res as unknown as NodeJS.WritableStream]);
         void recordAudit({
           orgId: ctx.orgId,
           actorId: ctx.userId,

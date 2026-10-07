@@ -1,6 +1,6 @@
 # cb API contract. Owned by cb-backend; consumers run `npm run sync:contract`.
 openapi: 3.1.0
-x-contract-version: 1.8.0
+x-contract-version: 1.9.0
 info:
   title: cb API
   version: 1.0.0
@@ -4001,6 +4001,23 @@ components:
         - killedReason
         - version
         - hasAccess
+    KeyHealth:
+      type: object
+      description: Whether the provider still accepts the stored key (never the key). `rejected` is shown as Expired.
+      properties:
+        status:
+          type: string
+          enum: [ok, rejected, unknown]
+        reason:
+          oneOf:
+            - type: string
+            - type: "null"
+        checkedAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: "null"
+      required: [status, reason, checkedAt]
     Resource:
       type: object
       properties:
@@ -4015,9 +4032,11 @@ components:
         config:
           type: object
           additionalProperties: true
-          description: Non-secret configuration (e.g. host, database, tls, upstreamUrl, authScheme, fakePrefix, basePath, redirectHosts, region, endpoint, tokenUrl, projectId, clientEmail, keyId, teamId). Never contains credentials.
+          description: Non-secret configuration (e.g. host, database, tls, upstreamUrl, authScheme, fakePrefix, basePath, redirectHosts, region, endpoint, tokenUrl, projectId, clientEmail, keyId, teamId). Never contains credentials. A CA certificate is shown only as `caCertFile` ({subject, notAfter, size}); `caCert` (the PEM) is never returned, including for rows stored before the file-store migration.
         credentialsSet:
           type: boolean
+        health:
+          $ref: "#/components/schemas/KeyHealth"
         rotatedAt:
           oneOf:
             - type: string
@@ -4047,6 +4066,7 @@ components:
         - name
         - config
         - credentialsSet
+        - health
         - rotatedAt
         - disabled
         - brokeredFields

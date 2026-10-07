@@ -5,6 +5,8 @@ import { safeEqual } from "../../crypto/safe-equal.js";
 import { logger } from "../../logger/logger.js";
 import { recordAudit } from "../../services/audit.service.js";
 import { fakeApiKey } from "../../services/fakes.service.js";
+import { DEFAULT_PROFILE } from "../../services/profile.service.js";
+import { healthTap } from "../../services/resource-health.service.js";
 import type { TunnelContext } from "../types.js";
 import {
   type GatewayRequest,
@@ -13,7 +15,7 @@ import {
   HOP_BY_HOP,
   sendJson,
 } from "./http-adapter.js";
-import { createRedactor } from "./redaction.js";
+import { createRedactor, decoded, injectedBasic, redactHeaders } from "./redaction.js";
 import { upstreamDispatcher } from "./upstream.js";
 
 export interface OAuthResourceConfig {
@@ -102,8 +104,22 @@ export function createOAuthHandler(ctx: TunnelContext): Handler {
         const out: Record<string, string | string[]> = {};
         for (const [k, v] of Object.entries(up.headers))
           if (!HOP_BY_HOP.has(k) && v !== undefined) out[k] = v;
-        (res as import("node:http").ServerResponse).writeHead(up.statusCode, out);
-        await pipeline(up.body, createRedactor(ctx.secret), res as unknown as NodeJS.WritableStream);
+        const plain = decoded(up.body, out);
+        const secrets = [ctx.secret, ...injectedBasic(headers.authorization)];
+        (res as import("node:http").ServerResponse).writeHead(
+          up.statusCode,
+          redactHeaders(plain.headers, secrets),
+        );
+        const tap =
+          swapped && ctx.profile === DEFAULT_PROFILE
+            ? healthTap("oauth", up.statusCode, ctx.resource.id, ctx.resource.keyVersion)
+            : undefined;
+        await pipeline([
+          plain.body,
+          createRedactor(secrets),
+          ...(tap ? [tap] : []),
+          res as unknown as NodeJS.WritableStream,
+        ]);
         if (swapped) {
           void recordAudit({
             orgId: ctx.orgId,
