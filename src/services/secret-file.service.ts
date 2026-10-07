@@ -23,9 +23,26 @@ export interface CaFileRef extends FileRef {
 const masterKey = () => Buffer.from(getEnv().MASTER_KEY, "base64");
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
-/** Ciphertext cache (never plaintext): avoids a store round trip on every tunnel open. */
+/**
+ * Ciphertext cache (never plaintext): avoids a store round trip on every tunnel open. Entries are kept in write order
+ * (oldest first), expire after CACHE_MS, and at most SECRET_FILE_CACHE_MAX are held (M4).
+ */
 const CACHE_MS = 5 * 60_000;
+export const SECRET_FILE_CACHE_MAX = 500;
 const cache = new Map<string, { at: number; enc: EncryptedSecret }>();
+
+function cachePut(path: string, enc: EncryptedSecret): void {
+  const now = Date.now();
+  cache.delete(path);
+  cache.set(path, { at: now, enc });
+  for (const [p, v] of cache) {
+    if (cache.size <= SECRET_FILE_CACHE_MAX && now - v.at < CACHE_MS) break;
+    cache.delete(p);
+  }
+}
+
+/** Tests: entries currently cached. */
+export const secretFileCacheSize = () => cache.size;
 
 /** Encrypts with the envelope key (FR-CRY-001) and stores only the ciphertext. */
 export async function saveSecretFile(
@@ -36,8 +53,10 @@ export async function saveSecretFile(
 ): Promise<FileRef> {
   const path = `orgs/${orgId.toHexString()}/resources/${resourceId.toHexString()}/${field}-${randomBytes(8).toString("hex")}.enc`;
   const enc = encryptSecret(masterKey(), plaintext);
+  // Whatever was cached for this path is stale from the moment a write starts, even if the write fails (M4).
+  cache.delete(path);
   await getFileStore().put(path, Buffer.from(JSON.stringify(enc)));
-  cache.set(path, { at: Date.now(), enc });
+  cachePut(path, enc);
   return { store: getEnv().FILE_STORE, path, sha256: sha256(plaintext), size: Buffer.byteLength(plaintext) };
 }
 
@@ -63,7 +82,7 @@ export async function readSecretFile(ref: FileRef): Promise<string> {
   let enc = hit && Date.now() - hit.at < CACHE_MS ? hit.enc : undefined;
   if (!enc) {
     enc = JSON.parse((await getFileStore().get(ref.path)).toString()) as EncryptedSecret;
-    cache.set(ref.path, { at: Date.now(), enc });
+    cachePut(ref.path, enc);
   }
   return decryptSecret(masterKey(), enc);
 }
