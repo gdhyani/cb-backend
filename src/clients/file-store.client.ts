@@ -14,6 +14,20 @@ export interface FileStore {
   remove(paths: string[]): Promise<void>;
 }
 
+/**
+ * The exact bytes of a stored `data` field (M3). The driver may hand back a BSON Binary (its `buffer` is a Uint8Array
+ * of `position` bytes), a Buffer or a Uint8Array; the last two can be views into a larger ArrayBuffer, so `.buffer`
+ * alone would read neighbouring memory.
+ */
+export function storedBytes(data: unknown): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof Uint8Array) return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  const bin = data as { _bsontype?: string; buffer?: unknown; position?: number } | null;
+  if (bin?._bsontype === "Binary" && bin.buffer instanceof Uint8Array)
+    return storedBytes(bin.buffer.subarray(0, bin.position ?? bin.buffer.byteLength));
+  throw new Error("stored file: unexpected data type");
+}
+
 /** FILE_STORE=mongo (default): the backend's own database. */
 export class MongoFileStore implements FileStore {
   async put(path: string, bytes: Buffer): Promise<void> {
@@ -22,7 +36,7 @@ export class MongoFileStore implements FileStore {
   async get(path: string): Promise<Buffer> {
     const doc = await StoredFileModel.findOne({ path }).lean();
     if (!doc) throw new Error(`stored file not found: ${path}`);
-    return Buffer.from(doc.data.buffer ?? doc.data);
+    return storedBytes(doc.data);
   }
   async remove(paths: string[]): Promise<void> {
     if (paths.length) await StoredFileModel.deleteMany({ path: { $in: paths } });

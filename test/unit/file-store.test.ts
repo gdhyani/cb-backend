@@ -1,7 +1,9 @@
+import { Binary } from "bson";
 import { MockAgent } from "undici";
-import { describe, expect, it } from "vitest";
-import { SupabaseFileStore } from "../../src/clients/file-store.client.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { MongoFileStore, SupabaseFileStore } from "../../src/clients/file-store.client.js";
 import { loadEnv } from "../../src/config/env.js";
+import { StoredFileModel } from "../../src/models/stored-file.model.js";
 import { testEnvVars } from "../helpers/env.js";
 
 const URL_ = "https://proj.supabase.co";
@@ -103,5 +105,29 @@ describe("FILE_STORE env (B10)", () => {
       SUPABASE_SECRET_KEY: KEY,
     });
     expect(env.SUPABASE_STORAGE_BUCKET).toBe("cb-files");
+  });
+});
+
+describe("Mongo file store reads every byte form (M3, S1)", () => {
+  const stub = (data: unknown) =>
+    vi
+      .spyOn(StoredFileModel, "findOne")
+      .mockReturnValue({ lean: async () => ({ path: "p", data }) } as never);
+  afterEach(() => vi.restoreAllMocks());
+
+  it("M3 BSON Binary, Buffer and a Uint8Array view all come back as exactly the stored bytes", async () => {
+    const want = "CIPHERTEXT-BYTES";
+    // A Buffer and a Uint8Array that are views into a larger ArrayBuffer (as Node's pool and drivers hand out).
+    const pool = Buffer.from(`xxxx${want}yyyy`);
+    const forms = [
+      new Binary(Buffer.from(want)),
+      pool.subarray(4, 4 + want.length),
+      new Uint8Array(pool.buffer, pool.byteOffset + 4, want.length),
+    ];
+    for (const data of forms) {
+      stub(data);
+      expect((await new MongoFileStore().get("p")).toString()).toBe(want);
+      vi.restoreAllMocks();
+    }
   });
 });
