@@ -193,6 +193,7 @@ async function handleTunnel(
         kind: r.kind as ResourceKind,
         name: r.name,
         config: (r.config as Record<string, unknown>) ?? {},
+        keyVersion: r.rotatedAt ? new Date(r.rotatedAt).toISOString() : null,
       },
       secret,
       profile,
@@ -273,7 +274,8 @@ async function handleTunnel(
   } catch (err) {
     const summary = err instanceof UpstreamError ? err.message : "gateway error";
     // B11: the stored login stopped working upstream (deleted user, rotated password) → "Expired" in the dashboard.
-    if (ctx.profile === DEFAULT_PROFILE) noteHealth(resource._id, healthFromUpstreamError(summary));
+    if (ctx.profile === DEFAULT_PROFILE)
+      noteHealth(resource._id, healthFromUpstreamError(summary), ctx.resource.keyVersion);
     logger.warn(`tunnel ${ctx.id.slice(0, 8)} → 4502 ${resource.kind}:${resource.name} — ${summary}`);
     if (!(err instanceof UpstreamError))
       logger.error(`tunnel ${ctx.id.slice(0, 8)} adapter failure`, {

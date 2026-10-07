@@ -46,33 +46,62 @@ export function healthFromUpstreamError(message: string): Health | undefined {
 
 /** One write per resource per 30 s while the status holds; a change of status is written at once. */
 const THROTTLE_MS = 30_000;
+/** Hard cap on remembered resources, on top of dropping entries whose window has passed (M1). */
+const THROTTLE_MAX = 5_000;
+/** Insertion order = last write order, so the oldest entries are always at the front. */
 const last = new Map<string, { status: HealthStatus; at: number }>();
 
+function remember(key: string, status: HealthStatus, now: number): void {
+  last.delete(key);
+  last.set(key, { status, at: now });
+  for (const [k, v] of last) {
+    if (last.size <= THROTTLE_MAX && now - v.at < THROTTLE_MS) break;
+    last.delete(k);
+  }
+}
+
+/**
+ * Records a key's health. `keyVersion` is the resource's `rotatedAt` when the reporter read the key: a report about
+ * a key that was replaced since (an old tunnel, a slow test) matches nothing and is dropped (M1). Undefined = the
+ * caller just wrote the key itself and needs no check.
+ */
 export async function markHealth(
   resourceId: Types.ObjectId | string,
   health: Health | undefined,
+  keyVersion?: Date | string | null,
 ): Promise<void> {
   if (!health) return;
   const id = String(resourceId);
-  const prev = last.get(id);
-  if (prev && prev.status === health.status && Date.now() - prev.at < THROTTLE_MS) return;
-  last.set(id, { status: health.status, at: Date.now() });
-  await ResourceModel.updateOne(
-    { _id: id },
-    { $set: { health: { status: health.status, reason: health.reason ?? null, checkedAt: new Date() } } },
-  ).catch((err: unknown) =>
+  const version = keyVersion == null ? keyVersion : new Date(keyVersion);
+  const key = `${id}@${version === undefined ? "*" : (version?.getTime() ?? "none")}`;
+  const now = Date.now();
+  const prev = last.get(key);
+  if (prev && prev.status === health.status && now - prev.at < THROTTLE_MS) return;
+  remember(key, health.status, now);
+  await ResourceModel.updateOne(version === undefined ? { _id: id } : { _id: id, rotatedAt: version }, {
+    $set: { health: { status: health.status, reason: health.reason ?? null, checkedAt: new Date() } },
+  }).catch((err: unknown) =>
     logger.warn(`key health: could not record for ${id} — ${err instanceof Error ? err.message : "error"}`),
   );
 }
 
 /** Fire-and-forget form for the data plane: never delays or breaks a request. */
-export function noteHealth(resourceId: Types.ObjectId | string, health: Health | undefined): void {
-  void markHealth(resourceId, health);
+export function noteHealth(
+  resourceId: Types.ObjectId | string,
+  health: Health | undefined,
+  keyVersion?: Date | string | null,
+): void {
+  void markHealth(resourceId, health, keyVersion);
 }
 
 /** Tests: forget throttling state. */
 export function resetHealthThrottle(): void {
   last.clear();
+}
+
+/** Tests: how many throttle entries are remembered. */
+export function healthThrottleSize(): number {
+  return last.size;
 }
 
 const TEST_REJECTED =
@@ -90,9 +119,14 @@ export function healthFromTest(result: { ok: boolean; message: string }): Health
  * Data plane: classifies an upstream answer without delaying it. 2xx/401 are decided from the status; a 400/403 is
  * decided from the first 2 KB of the body (passed through untouched).
  */
-export function healthTap(kind: ResourceKind, status: number, resourceId: string): Transform | undefined {
+export function healthTap(
+  kind: ResourceKind,
+  status: number,
+  resourceId: string,
+  keyVersion: string | null | undefined,
+): Transform | undefined {
   if (status !== 400 && status !== 403) {
-    noteHealth(resourceId, healthFromHttp(kind, status, ""));
+    noteHealth(resourceId, healthFromHttp(kind, status, ""), keyVersion);
     return undefined;
   }
   let head = "";
@@ -102,7 +136,7 @@ export function healthTap(kind: ResourceKind, status: number, resourceId: string
       cb(null, chunk);
     },
     flush(cb) {
-      noteHealth(resourceId, healthFromHttp(kind, status, head));
+      noteHealth(resourceId, healthFromHttp(kind, status, head), keyVersion);
       cb();
     },
   });

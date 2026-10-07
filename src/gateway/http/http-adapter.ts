@@ -224,7 +224,7 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
         // I2: only a request that carried the stored default key says anything about that key.
         const tap =
           own && ctx.profile === DEFAULT_PROFILE
-            ? healthTap("http", up.statusCode, ctx.resource.id)
+            ? healthTap("http", up.statusCode, ctx.resource.id, ctx.resource.keyVersion)
             : undefined;
         const steps = [createRedactor(secrets), ...(learn ? [learn] : []), ...(tap ? [tap] : [])];
         await pipeline([plain.body, ...steps, res as unknown as NodeJS.WritableStream]);

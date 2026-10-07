@@ -465,7 +465,8 @@ export async function testResource(
   );
   const result: ResourceTestDto = { ...draft, profile };
   // B11: only the default credentials decide the key's status shown in the table.
-  if (profile === DEFAULT_PROFILE) await markHealth(resource._id, healthFromTest(draft));
+  if (profile === DEFAULT_PROFILE)
+    await markHealth(resource._id, healthFromTest(draft), resource.rotatedAt ?? null);
   await recordAudit({
     orgId: resource.orgId,
     actorId,

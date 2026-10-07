@@ -173,7 +173,9 @@ export function createAwsHandler(ctx: TunnelContext): Handler {
           redactHeaders(plain.headers, [real.secretAccessKey, real.accessKeyId]),
         );
         const tap =
-          ctx.profile === DEFAULT_PROFILE ? healthTap("aws", up.statusCode, ctx.resource.id) : undefined;
+          ctx.profile === DEFAULT_PROFILE
+            ? healthTap("aws", up.statusCode, ctx.resource.id, ctx.resource.keyVersion)
+            : undefined;
         await pipeline([
           plain.body,
           createRedactor([real.secretAccessKey, real.accessKeyId]),

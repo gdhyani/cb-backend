@@ -112,7 +112,7 @@ export function createOAuthHandler(ctx: TunnelContext): Handler {
         );
         const tap =
           swapped && ctx.profile === DEFAULT_PROFILE
-            ? healthTap("oauth", up.statusCode, ctx.resource.id)
+            ? healthTap("oauth", up.statusCode, ctx.resource.id, ctx.resource.keyVersion)
             : undefined;
         await pipeline([
           plain.body,

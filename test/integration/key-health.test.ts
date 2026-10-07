@@ -2,13 +2,18 @@ import type http from "node:http";
 import type { AddressInfo } from "node:net";
 import { Redis } from "ioredis";
 import mongoose from "mongoose";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../../src/app.js";
 import { connectMongo, disconnectMongo } from "../../src/clients/mongodb.client.js";
 import { loadEnv, setEnv } from "../../src/config/env.js";
 import { resetUpstreamDispatcher } from "../../src/gateway/http/upstream.js";
+import { ResourceModel } from "../../src/models/resource.model.js";
 import { createServer } from "../../src/server.js";
-import { resetHealthThrottle } from "../../src/services/resource-health.service.js";
+import {
+  healthThrottleSize,
+  markHealth,
+  resetHealthThrottle,
+} from "../../src/services/resource-health.service.js";
 import { localListener } from "../helpers/agent.js";
 import { addMember, cli, loginDevice, signupOwner } from "../helpers/api.js";
 import { testEnvVars } from "../helpers/env.js";
@@ -157,5 +162,40 @@ describe("key health (B11): green when the provider accepts the key, Expired whe
     client.disconnect();
     expect(await until(health, "rejected")).toMatchObject({ status: "rejected" });
     listener.close();
+  });
+
+  it("M1 a report from a tunnel opened before Replace value never flips the new key to Expired", async () => {
+    const { owner, id, health } = await setup(
+      { kind: "http", upstreamUrl: provider.url, apiKey: DELETED, testPath: "/v1/models" },
+      "key",
+    );
+    // The key version a tunnel opened now would carry.
+    const before = await ResourceModel.findById(id).lean();
+    await new Promise((r) => setTimeout(r, 5));
+    expect((await owner.patch(`/api/resources/${id}`, { apiKey: GOOD, test: true })).status).toBe(200);
+    expect(await health()).toMatchObject({ status: "ok" });
+
+    // The old tunnel's provider refusal arrives late: it used the replaced key, so it is dropped.
+    await markHealth(id, { status: "rejected", reason: "late" }, before?.rotatedAt ?? null);
+    expect(await health()).toMatchObject({ status: "ok" });
+
+    // A refusal of the current key still counts.
+    const now = await ResourceModel.findById(id).lean();
+    await markHealth(id, { status: "rejected", reason: "now" }, now?.rotatedAt ?? null);
+    expect(await health()).toMatchObject({ status: "rejected" });
+  });
+
+  it("M1 the health throttle forgets entries once their window has passed", async () => {
+    const t0 = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      for (let i = 0; i < 50; i++) await markHealth(new mongoose.Types.ObjectId(), { status: "ok" }, null);
+      expect(healthThrottleSize()).toBe(50);
+      clock.mockReturnValue(t0 + 31_000);
+      await markHealth(new mongoose.Types.ObjectId(), { status: "ok" }, null);
+      expect(healthThrottleSize()).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
   });
 });
