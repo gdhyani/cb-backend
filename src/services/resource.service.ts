@@ -29,6 +29,7 @@ import { touchEnvironment } from "./environment.service.js";
 import { readResourceSecret } from "./resource-secret.service.js";
 import {
   type CaFileRef,
+  caCertInfo,
   type FileRef,
   removeSecretFiles,
   sameFile,
@@ -433,12 +434,22 @@ export function toResourceDto(r: {
 /** Kinds whose secret is an uploaded file, kept in the file store (B10). */
 const FILE_KINDS = new Set<ResourceKind>(["google-sa", "apns"]);
 
-/** What admins see of a stored CA: whose it is and until when — never the PEM or where it is stored. */
+/**
+ * What admins see of a CA: whose it is and until when — never the PEM or where it is stored. A row from before the
+ * file-store migration still holds the PEM inline; it gets the same shape, derived from the PEM (M6).
+ */
 function publicConfig(config: Record<string, unknown>): Record<string, unknown> {
-  const ref = config.caCertFile as CaFileRef | undefined;
-  if (!ref) return config;
-  const { caCertFile: _ref, ...rest } = config;
-  return { ...rest, caCertFile: { subject: ref.subject, notAfter: ref.notAfter, size: ref.size } };
+  const { caCertFile, caCert, ...rest } = config;
+  const ref = caCertFile as CaFileRef | undefined;
+  if (ref) return { ...rest, caCertFile: { subject: ref.subject, notAfter: ref.notAfter, size: ref.size } };
+  if (typeof caCert === "string" && caCert) {
+    try {
+      return { ...rest, caCertFile: { ...caCertInfo(caCert), size: Buffer.byteLength(caCert) } };
+    } catch {
+      return rest; // unreadable: show nothing rather than echo it
+    }
+  }
+  return rest;
 }
 
 /** Moves an inline `caCert` into the file store; keeps the stored object when the same CA is sent again. */

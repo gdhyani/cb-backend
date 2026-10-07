@@ -66,11 +66,15 @@ export async function saveCaFile(
   pem: string,
 ): Promise<CaFileRef> {
   const ref = await saveSecretFile(orgId, resourceId, "caCert", pem);
+  return { ...ref, ...caCertInfo(pem) };
+}
+
+/** Whose CA and until when, from the first certificate of a PEM bundle. Throws on an unreadable PEM. */
+export function caCertInfo(pem: string): { subject: string; notAfter: string } {
   const first = new X509Certificate(
     pem.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/)?.[0] ?? pem,
   );
   return {
-    ...ref,
     subject: first.subject.replace(/\n/g, ", "),
     notAfter: new Date(first.validTo).toISOString(),
   };
