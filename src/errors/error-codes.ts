@@ -3,6 +3,8 @@ export const ERROR_CODES = {
   UNAUTHORIZED: { statusCode: 401, message: "Authentication is required." },
   FORBIDDEN: { statusCode: 403, message: "You do not have access to this resource." },
   INVALID_CREDENTIALS: { statusCode: 401, message: "Email or password is incorrect." },
+  WRONG_PASSWORD: { statusCode: 403, message: "Password is incorrect." },
+  CONFIRMATION_MISMATCH: { statusCode: 400, message: "The confirmation text does not match." },
   CSRF_REQUIRED: { statusCode: 403, message: "This request is missing its CSRF header." },
   NO_ACCESS: {
     statusCode: 403,

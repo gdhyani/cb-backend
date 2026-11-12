@@ -3,6 +3,7 @@ import {
   activateKillSwitchHandler,
   clearKillSwitchHandler,
   createInviteHandler,
+  deleteOrgHandler,
   getMemberAccessHandler,
   getOrgHandler,
   getOrgStatsHandler,
@@ -30,6 +31,7 @@ export const orgRoutes = Router();
 orgRoutes.use("/orgs", requireAuth);
 orgRoutes.get("/orgs", listOrgsHandler);
 orgRoutes.get("/orgs/:orgId", getOrgHandler);
+orgRoutes.delete("/orgs/:orgId", deleteOrgHandler);
 orgRoutes.get("/orgs/:orgId/members", listMembersHandler);
 orgRoutes.patch("/orgs/:orgId/members/:userId", updateMemberHandler);
 orgRoutes.delete("/orgs/:orgId/members/:userId", removeMemberHandler);

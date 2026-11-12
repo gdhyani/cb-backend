@@ -2,6 +2,7 @@ import type { CookieOptions, NextFunction, Request, Response } from "express";
 import { getEnv } from "../config/env.js";
 import { toAppError } from "../errors/to-app-error.js";
 import { authOf, SESSION_COOKIE } from "../middlewares/auth.middleware.js";
+import * as accountService from "../services/account.service.js";
 import * as authService from "../services/auth.service.js";
 import * as inviteService from "../services/invite.service.js";
 import { sendSuccess } from "../utils/response.js";
@@ -51,6 +52,30 @@ export async function meHandler(_req: Request, res: Response, next: NextFunction
     sendSuccess(res, await authService.getMe(authOf(res).userId));
   } catch (err) {
     next(toAppError(err, "auth.controller.me: failed to load current user"));
+  }
+}
+
+export async function deletionPreviewHandler(
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    sendSuccess(res, await accountService.deletionPreview(authOf(res).userId));
+  } catch (err) {
+    next(toAppError(err, "auth.controller.deletionPreview: failed to load the account deletion preview"));
+  }
+}
+
+/** FR-ACC-001: deletes the signed-in user's account and ends the session (like logout). */
+export async function deleteAccountHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const input = accountService.DeleteConfirmBody.parse(req.body ?? {});
+    await accountService.deleteAccount(authOf(res).userId, input);
+    res.clearCookie(SESSION_COOKIE, { path: "/" });
+    sendSuccess(res, { deleted: true });
+  } catch (err) {
+    next(toAppError(err, "auth.controller.deleteAccount: failed to delete account"));
   }
 }
 
