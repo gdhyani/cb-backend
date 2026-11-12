@@ -1,10 +1,16 @@
 import type { CookieOptions, NextFunction, Request, Response } from "express";
 import { getEnv } from "../config/env.js";
+import { AppError } from "../errors/app-error.js";
 import { toAppError } from "../errors/to-app-error.js";
 import { authOf, SESSION_COOKIE } from "../middlewares/auth.middleware.js";
 import * as accountService from "../services/account.service.js";
 import * as authService from "../services/auth.service.js";
 import * as inviteService from "../services/invite.service.js";
+import {
+  loginRetryAfterSeconds,
+  recordLoginFailure,
+  recordLoginSuccess,
+} from "../services/login-limit.service.js";
 import { sendSuccess } from "../utils/response.js";
 
 function cookieOptions(expires: Date): CookieOptions {
@@ -28,7 +34,24 @@ export async function signupHandler(req: Request, res: Response, next: NextFunct
 
 export async function loginHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const user = await authService.login(authService.LoginBody.parse(req.body));
+    const body = authService.LoginBody.parse(req.body);
+    const ip = req.ip ?? "";
+    // S10 / FR-CRY-006: refuse while this email or address is over its failed-login limit.
+    const wait = loginRetryAfterSeconds(body.email, ip);
+    if (wait > 0) {
+      res.setHeader("Retry-After", String(wait));
+      throw new AppError("RATE_LIMITED", {
+        message: `Too many failed logins. Try again in ${Math.ceil(wait / 60)} minute(s).`,
+      });
+    }
+    let user: Awaited<ReturnType<typeof authService.login>>;
+    try {
+      user = await authService.login(body);
+    } catch (err) {
+      if (err instanceof AppError && err.code === "INVALID_CREDENTIALS") recordLoginFailure(body.email, ip);
+      throw err;
+    }
+    recordLoginSuccess(body.email);
     await startSession(req, res, user.id);
     sendSuccess(res, await authService.getMe(user.id));
   } catch (err) {

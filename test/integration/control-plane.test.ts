@@ -602,7 +602,7 @@ describe("kill switches, sessions and heartbeat (J7, FR-UI-002)", () => {
 });
 
 describe("CLI tokens (FR-AUTH-002/003/004)", () => {
-  it("FR-AUTH-003 refresh rotates; reusing a used refresh token signs the device out", async () => {
+  it("FR-AUTH-003 S10 refresh rotates; reusing a used refresh token signs the device out", async () => {
     const { owner } = await signupOwner(app);
     const { token, refreshToken, deviceId } = await loginDevice(app, owner);
     const first = await request(app).post("/api/cli/token/refresh").send({ refreshToken });
