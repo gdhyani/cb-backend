@@ -57,3 +57,14 @@ jobs:
       - name: Service logs on failure
         if: failure()
         run: docker compose -f docker-compose.test.yml logs --tail 50
+
+  audit:
+    # M7: a high or critical advisory in a runtime dependency fails CI (dev-only tools are reviewed by hand).
+    name: no high or critical runtime advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm audit --omit=dev --audit-level=high
