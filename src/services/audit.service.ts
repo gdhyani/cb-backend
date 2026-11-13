@@ -119,7 +119,11 @@ export async function listAudit(
       action: r.action,
       category: categoryOf(r.action),
       outcome: r.outcome,
-      actor: actor ? { id: actor._id.toHexString(), name: actor.name, email: actor.email } : null,
+      actor: actor
+        ? { id: actor._id.toHexString(), name: actor.name, email: actor.email }
+        : r.actorId
+          ? { id: r.actorId.toHexString(), name: "Deleted user", email: "" }
+          : null,
       target: targetUser ? null : (r.target ?? null),
       targetUser: targetUser ? { id: targetUser._id.toHexString(), name: targetUser.name } : null,
       project: ref(r.projectId, projectMap),

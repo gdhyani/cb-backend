@@ -1,6 +1,6 @@
 # cb API contract. Owned by cb-backend; consumers run `npm run sync:contract`.
 openapi: 3.1.0
-x-contract-version: 1.9.0
+x-contract-version: 1.10.0
 info:
   title: cb API
   version: 1.0.0
@@ -826,6 +826,81 @@ paths:
                       - data
         "401":
           $ref: "#/components/responses/Unauthorized"
+    delete:
+      operationId: deleteAccount
+      tags:
+        - Auth
+      summary: Delete the signed-in user's account (FR-ACC-001)
+      description: >-
+        Re-checks the password and needs `confirm` equal to the account email (case-insensitive).
+        Organizations where the user is the only owner are deleted with all their data; in every other
+        organization the user is removed (audit `member.removed`). Devices, sessions and grants are deleted
+        and the session cookie is cleared. Errors - 403 WRONG_PASSWORD, 400 CONFIRMATION_MISMATCH.
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteConfirmBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          deleted:
+                            type: boolean
+                            const: true
+                        required:
+                          - deleted
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/auth/me/deletion:
+    get:
+      operationId: getAccountDeletionPreview
+      tags:
+        - Auth
+      summary: What deleting the account would delete or leave (FR-ACC-003)
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/AccountDeletionPreview"
+                    required:
+                      - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/invites/{token}:
     get:
       operationId: previewInvite
@@ -1333,6 +1408,57 @@ paths:
                         $ref: "#/components/schemas/Org"
                     required:
                       - data
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteOrg
+      tags:
+        - Orgs
+      summary: Delete an organization and all its data (owners only, FR-ACC-002)
+      description: >-
+        Re-checks the password and needs `confirm` equal to the organization name. Hard-deletes projects,
+        environments, variables, services and their secrets, grants, invites, kill switches, audit events and
+        memberships; live tunnels close. Errors - 403 FORBIDDEN (not an owner), 403 WRONG_PASSWORD,
+        400 CONFIRMATION_MISMATCH.
+      security:
+        - sessionCookie: []
+        - deviceToken: []
+      parameters:
+        - $ref: "#/components/parameters/orgId"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/CsrfHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteConfirmBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          deleted:
+                            type: boolean
+                            const: true
+                        required:
+                          - deleted
+                    required:
+                      - data
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -4311,6 +4437,7 @@ components:
             - denied
             - error
         actor:
+          description: Null for system events; a deleted user reads name "Deleted user" with an empty email.
           oneOf:
             - type: object
               properties:
@@ -4655,6 +4782,59 @@ components:
           maxLength: 100
       required:
         - userCode
+    DeleteConfirmBody:
+      type: object
+      properties:
+        password:
+          type: string
+          minLength: 1
+        confirm:
+          type: string
+          description: The account email (account deletion) or the organization name (organization deletion).
+      required:
+        - password
+        - confirm
+    AccountDeletionPreview:
+      type: object
+      properties:
+        email:
+          type: string
+        orgsDeleted:
+          type: array
+          description: Organizations where the user is the only owner; they are deleted with the account.
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              memberCount:
+                type: integer
+            required:
+              - id
+              - name
+              - memberCount
+        orgsLeft:
+          type: array
+          description: Organizations the user is removed from.
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              role:
+                $ref: "#/components/schemas/Role"
+            required:
+              - id
+              - name
+              - role
+      required:
+        - email
+        - orgsDeleted
+        - orgsLeft
     UpdateRoleBody:
       type: object
       properties:

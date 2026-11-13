@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { toAppError } from "../errors/to-app-error.js";
 import { authOf } from "../middlewares/auth.middleware.js";
 import { requireMembership } from "../services/access.service.js";
+import * as accountService from "../services/account.service.js";
 import * as auditService from "../services/audit.service.js";
 import * as deviceService from "../services/device.service.js";
 import * as grantService from "../services/grant.service.js";
@@ -29,6 +30,17 @@ export async function getOrgHandler(req: Request, res: Response, next: NextFunct
     sendSuccess(res, await orgService.getOrg(authOf(res).userId, orgIdOf(req)));
   } catch (err) {
     next(toAppError(err, "org.controller.getOrg: failed to load organization"));
+  }
+}
+
+/** FR-ACC-002: owners delete the whole organization after re-entering their password and the org name. */
+export async function deleteOrgHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const input = accountService.DeleteConfirmBody.parse(req.body ?? {});
+    await accountService.deleteOrganization(authOf(res).userId, orgIdOf(req), input);
+    sendSuccess(res, { deleted: true });
+  } catch (err) {
+    next(toAppError(err, "org.controller.deleteOrg: failed to delete organization"));
   }
 }
 

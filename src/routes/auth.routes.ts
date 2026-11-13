@@ -1,6 +1,8 @@
 import { Router } from "express";
 import {
   acceptInviteHandler,
+  deleteAccountHandler,
+  deletionPreviewHandler,
   loginHandler,
   logoutHandler,
   meHandler,
@@ -15,5 +17,7 @@ authRoutes.post("/auth/signup", signupHandler);
 authRoutes.post("/auth/login", loginHandler);
 authRoutes.post("/auth/logout", requireAuth, logoutHandler);
 authRoutes.get("/auth/me", requireAuth, meHandler);
+authRoutes.delete("/auth/me", requireAuth, deleteAccountHandler);
+authRoutes.get("/auth/me/deletion", requireAuth, deletionPreviewHandler);
 authRoutes.get("/invites/:token", previewInviteHandler);
 authRoutes.post("/auth/accept-invite", csrfIfSession, acceptInviteHandler);
