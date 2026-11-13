@@ -137,8 +137,23 @@ async function handleTunnel(
           .sort({ createdAt: 1 })
           .lean();
   // B10: a CA certificate kept in the file store comes back into config (memory only) for upstream TLS.
-  const candidates = await Promise.all(loaded.map((r) => withCaCert(r)));
-  const resource = candidates[0];
+  const all = await Promise.all(loaded.map((r) => withCaCert(r)));
+  // S3 / FR-GW-003: every service on a shared Layer 2 host is checked on its own; a stopped or forbidden one is
+  // left out of the tunnel instead of riding along with the first.
+  let denial: unknown;
+  const candidates: typeof all = [];
+  for (const r of all) {
+    try {
+      await assertRuntimeAccess(auth.userId, env, {
+        deviceId: auth.deviceId,
+        resourceId: r._id.toHexString(),
+      });
+      candidates.push(r);
+    } catch (err) {
+      denial ??= err;
+    }
+  }
+  const resource = candidates[0] ?? all[0];
   if (!resource) {
     ws.close(CloseCode.Forbidden, "no resource for this tunnel");
     return;
@@ -152,12 +167,8 @@ async function handleTunnel(
     resourceId: resource._id,
   };
 
-  try {
-    await assertRuntimeAccess(auth.userId, env, {
-      deviceId: auth.deviceId,
-      resourceId: resource._id.toHexString(),
-    });
-  } catch (err) {
+  if (candidates.length === 0) {
+    const err = denial;
     const code = err instanceof AppError ? err.code : "INTERNAL_ERROR";
     void recordAudit({ ...audit, action: "tunnel.denied", outcome: "denied", meta: { reason: code } });
     if (HTTP_HANDLERS[resource.kind as ResourceKind]) {
@@ -226,7 +237,8 @@ async function handleTunnel(
   }) as typeof ws.send;
 
   const hooks: AdapterHooks = {};
-  live.set(ctx.id, { ctx, ws, hooks });
+  // S4 / FR-GW-007: every service the tunnel carries is re-checked on revocation events, not only the first.
+  for (const c of contexts) live.set(c.id, { ctx: c, ws, hooks });
   const openedAt = Date.now();
   void recordAudit({
     ...audit,
@@ -243,7 +255,7 @@ async function handleTunnel(
     `tunnel ${ctx.id.slice(0, 8)} opened ${resource.kind}:${resource.name} layer=${ctx.layer} user=${auth.userId}`,
   );
   ws.on("close", (code) => {
-    live.delete(ctx.id);
+    for (const c of contexts) live.delete(c.id);
     for (const c of contexts) c.secret = "";
     void recordAudit({
       ...audit,

@@ -127,7 +127,18 @@ async function scenario(withOauth = false) {
   const boot = await cli(app, token).get(
     `/api/agent/bootstrap?projectId=${project.body.data.id}&env=development`,
   );
-  return { token, envId, boot: boot.body.data, resources: { fcm: fcm.body.data, apns: apns.body.data } };
+  return {
+    token,
+    envId,
+    owner,
+    orgId,
+    boot: boot.body.data,
+    resources: {
+      fcm: fcm.body.data,
+      apns: apns.body.data,
+      oauth: oauth?.body.data as { id: string } | undefined,
+    },
+  };
 }
 
 /** An HTTP/2 session to `host` through a Layer 2 tunnel, trusting only the org CA (as the preload does). */
@@ -316,5 +327,83 @@ describe("google-sa and apns adapters (§10.8, FR-CRY-004)", () => {
     );
     expect(forged.status).toBe(401);
     session.close();
+  });
+
+  const form = (fields: Record<string, string>) => new URLSearchParams(fields).toString();
+  const exchange = (session: http2.ClientHttp2Session, body: string) =>
+    send(session, { ":path": "/token", "content-type": "application/x-www-form-urlencoded" }, body);
+
+  it("S3 FR-GW-003 a resource emergency stop on the second service of a shared host is enforced when the tunnel opens", async () => {
+    const { token, envId, boot, owner, orgId, resources } = await scenario(true);
+    const kill = await owner.post(`/api/orgs/${orgId}/killswitches`, {
+      scope: "resource",
+      targetId: resources.oauth?.id,
+      reason: "suspected leak",
+    });
+    expect(kill.status).toBe(201);
+    const seenBefore = upstream.seen.filter((r) => r.body.includes(`client_secret=${OAUTH_SECRET}`)).length;
+    const session = h2Through(token, envId, "oauth2.googleapis.com", boot.orgCaCert);
+    session.on("error", () => undefined);
+    const signIn = await exchange(
+      session,
+      form({
+        grant_type: "authorization_code",
+        code: "c",
+        client_id: "web",
+        client_secret: boot.plain.GOOGLE_CLIENT_SECRET,
+      }),
+    ).catch(() => ({ status: 0, body: "" }));
+    expect(signIn.status).not.toBe(200);
+    expect(upstream.seen.filter((r) => r.body.includes(`client_secret=${OAUTH_SECRET}`)).length).toBe(
+      seenBefore,
+    );
+    session.close();
+  });
+
+  it("S4 FR-GW-007 stopping the second service of a shared host closes the open tunnel within 5 s", async () => {
+    const { token, envId, boot, owner, orgId, resources } = await scenario(true);
+    const session = h2Through(token, envId, "oauth2.googleapis.com", boot.orgCaCert);
+    session.on("error", () => undefined);
+    const ok = await exchange(
+      session,
+      form({
+        grant_type: "authorization_code",
+        code: "c",
+        client_id: "web",
+        client_secret: boot.plain.GOOGLE_CLIENT_SECRET,
+      }),
+    );
+    expect(ok.status).toBe(200);
+    const startedAt = Date.now();
+    const kill = await owner.post(`/api/orgs/${orgId}/killswitches`, {
+      scope: "resource",
+      targetId: resources.oauth?.id,
+      reason: "suspected leak",
+    });
+    expect(kill.status).toBe(201);
+    // The tunnel is closed: requests on it stop working within 5 s (the real secret is no longer used).
+    let stoppedAt = -1;
+    while (Date.now() - startedAt < 6_000) {
+      const r = await Promise.race([
+        exchange(
+          session,
+          form({
+            grant_type: "authorization_code",
+            code: "c",
+            client_id: "web",
+            client_secret: boot.plain.GOOGLE_CLIENT_SECRET,
+          }),
+        ).catch(() => ({ status: 0, body: "" })),
+        new Promise<{ status: number }>((r) => setTimeout(() => r({ status: 0 }), 1_000)),
+      ]);
+      if (r.status !== 200) {
+        stoppedAt = Date.now();
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    expect(stoppedAt, "the tunnel still served the stopped service").toBeGreaterThan(0);
+    expect(stoppedAt - startedAt).toBeLessThan(5_000);
+    session.destroy();
   });
 });
