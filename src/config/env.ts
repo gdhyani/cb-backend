@@ -24,12 +24,13 @@ const EnvSchema = z.object({
   UPSTREAM_EXTRA_CA_FILE: z.string().optional(),
   /**
    * S10: which proxies' X-Forwarded-For Express believes for the caller's address (login limits, webhook flood
-   * guard). Default `loopback`: the dashboard's same-origin proxy on this machine. `false` ignores the header;
-   * behind your own reverse proxy use its address/subnet or a hop count (Express "trust proxy" syntax).
+   * guard). Default `false`: the header is ignored (the dashboard's Next proxy does not set it, and passes a
+   * client's own value through). Behind a reverse proxy that sets it, list that proxy — together with `loopback` when
+   * the dashboard sits in between — in Express "trust proxy" syntax, e.g. `loopback, 10.0.0.0/8`.
    */
   TRUST_PROXY: z
     .string()
-    .default("loopback")
+    .default("false")
     .transform((v): boolean | number | string =>
       v === "false" ? false : v === "true" ? true : /^\d+$/.test(v) ? Number(v) : v,
     ),

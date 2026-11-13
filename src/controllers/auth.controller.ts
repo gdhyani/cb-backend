@@ -9,6 +9,8 @@ import * as inviteService from "../services/invite.service.js";
 import { beginLoginAttempt, loginSucceeded } from "../services/login-limit.service.js";
 import { sendSuccess } from "../utils/response.js";
 
+const isLoopback = (ip: string | undefined) => !ip || ip === "::1" || /^(::ffff:)?127\./.test(ip);
+
 function cookieOptions(expires: Date): CookieOptions {
   return { httpOnly: true, sameSite: "lax", secure: getEnv().COOKIE_SECURE, expires, path: "/" };
 }
@@ -31,7 +33,9 @@ export async function signupHandler(req: Request, res: Response, next: NextFunct
 export async function loginHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const body = authService.LoginBody.parse(req.body);
-    const ip = req.ip ?? "";
+    // A loopback caller is the dashboard's proxy (or this machine): its browsers can't be told apart, so only the
+    // per-email limit applies — otherwise a few wrong passwords would lock every dashboard user out.
+    const ip = isLoopback(req.ip) ? "" : (req.ip ?? "");
     // S10 / FR-CRY-006: refuse while this email or address is over its failed-login limit; otherwise the attempt is
     // counted before the password is checked and given back on success.
     const wait = beginLoginAttempt(body.email, ip);

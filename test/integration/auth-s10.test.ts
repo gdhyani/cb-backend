@@ -4,6 +4,7 @@ import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../../src/app.js";
 import { connectMongo, disconnectMongo } from "../../src/clients/mongodb.client.js";
+import { loadEnv, setEnv } from "../../src/config/env.js";
 import { LOGIN_MAX_FAILURES_PER_EMAIL, LOGIN_MAX_FAILURES_PER_IP } from "../../src/constants.js";
 import { UserModel } from "../../src/models/user.model.js";
 import {
@@ -13,7 +14,7 @@ import {
 } from "../../src/services/login-limit.service.js";
 import { loadOrgCa } from "../../src/services/org-ca.service.js";
 import { browser, cli, loginDevice, signupOwner } from "../helpers/api.js";
-import { useTestEnv } from "../helpers/env.js";
+import { testEnvVars, useTestEnv } from "../helpers/env.js";
 import { startMemoryMongo } from "../helpers/mongo.js";
 
 let mongo: Awaited<ReturnType<typeof startMemoryMongo>>;
@@ -62,13 +63,6 @@ describe("S10 / FR-CRY-006 login protection", () => {
     expect((await login(other.email, other.password)).status).toBe(200);
   });
 
-  it("S10 login is rate limited per IP across many emails", async () => {
-    for (let i = 0; i < LOGIN_MAX_FAILURES_PER_IP; i++)
-      expect((await login(`nobody-${i}@example.test`, "wrong-password")).status).toBe(401);
-    const { email, password } = await owner();
-    expect((await login(email, password)).status).toBe(429);
-  });
-
   it("S10 a successful login clears that email's failures", async () => {
     const { email, password } = await owner();
     for (let i = 0; i < LOGIN_MAX_FAILURES_PER_EMAIL - 1; i++) await login(email, "wrong-password");
@@ -92,19 +86,43 @@ describe("S10 / FR-CRY-006 login protection", () => {
     expect(results.filter((r) => r.status === 429).length).toBe(25 - guesses);
   });
 
-  it("S10 behind the dashboard (a loopback proxy) the per-IP limit uses the forwarded browser address", async () => {
-    const from = (ip: string, email: string, password: string) =>
-      request(app)
-        .post("/api/auth/login")
-        .set("x-cb-csrf", "1")
-        .set("x-forwarded-for", ip)
-        .send({ email, password });
+  /** An app as deployed behind a reverse proxy that sets X-Forwarded-For (TRUST_PROXY names that proxy). */
+  function proxiedApp() {
+    setEnv(loadEnv({ ...testEnvVars(mongo.uri), TRUST_PROXY: "loopback" }));
+    const proxied = createApp();
+    useTestEnv(mongo.uri);
+    return proxied;
+  }
+  const via = (target: Express, email: string, password: string, xff?: string) => {
+    const r = request(target).post("/api/auth/login").set("x-cb-csrf", "1");
+    if (xff) r.set("x-forwarded-for", xff);
+    return r.send({ email, password });
+  };
+
+  it("S10 behind a trusted reverse proxy, login is rate limited per client address across many emails", async () => {
+    const proxied = proxiedApp();
     for (let i = 0; i < LOGIN_MAX_FAILURES_PER_IP; i++)
-      expect((await from("203.0.113.7", `nobody-${i}@example.test`, "wrong-password")).status).toBe(401);
-    expect((await from("203.0.113.7", "nobody-x@example.test", "wrong-password")).status).toBe(429);
-    // Someone else, logging in through the same dashboard, is not locked out by that address.
+      expect((await via(proxied, `nobody-${i}@example.test`, "wrong-password", "203.0.113.7")).status).toBe(
+        401,
+      );
     const { email, password } = await owner();
-    expect((await from("198.51.100.9", email, password)).status).toBe(200);
+    expect((await via(proxied, email, password, "203.0.113.7")).status).toBe(429);
+    // Another client behind the same proxy is not affected.
+    expect((await via(proxied, email, password, "198.51.100.9")).status).toBe(200);
+  });
+
+  it("S10 dashboard logins (loopback, no X-Forwarded-For, as Next sends them) are not pooled into one address", async () => {
+    for (let i = 0; i <= LOGIN_MAX_FAILURES_PER_IP; i++)
+      expect((await via(app, `nobody-${i}@example.test`, "wrong-password")).status).toBe(401);
+    // Someone else logging in through the same dashboard is not locked out.
+    const { email, password } = await owner();
+    expect((await via(app, email, password)).status).toBe(200);
+  });
+
+  it("S10 by default no proxy header is trusted, so a client cannot choose its address", () => {
+    const trust = app.get("trust proxy fn") as (addr: string, i: number) => boolean;
+    expect(trust("127.0.0.1", 0)).toBe(false);
+    expect(trust("::1", 0)).toBe(false);
   });
 
   it("S10 the limiter's memory stays bounded however many emails and addresses are tried", () => {

@@ -16,7 +16,7 @@ describe("loadEnv", () => {
       ALLOW_PRIVATE_HTTP_UPSTREAMS: true,
       FILE_STORE: "mongo",
       SUPABASE_STORAGE_BUCKET: "cb-files",
-      TRUST_PROXY: "loopback",
+      TRUST_PROXY: false,
     });
   });
 

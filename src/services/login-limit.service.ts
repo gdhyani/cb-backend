@@ -48,7 +48,7 @@ const emailKey = (email: string) => email.trim().toLowerCase();
 export function loginRetryAfterSeconds(email: string, ip: string, now = Date.now()): number {
   const blocked = [
     { w: live(byEmail, emailKey(email), now), max: LOGIN_MAX_FAILURES_PER_EMAIL },
-    { w: live(byIp, ip, now), max: LOGIN_MAX_FAILURES_PER_IP },
+    { w: ip ? live(byIp, ip, now) : undefined, max: LOGIN_MAX_FAILURES_PER_IP },
   ].filter((x) => x.w && x.w.failures >= x.max);
   if (blocked.length === 0) return 0;
   const endsAt = Math.max(...blocked.map((x) => x.w?.endsAt ?? now));
@@ -57,7 +57,8 @@ export function loginRetryAfterSeconds(email: string, ip: string, now = Date.now
 
 export function recordLoginFailure(email: string, ip: string, now = Date.now()): void {
   bump(byEmail, emailKey(email), now);
-  bump(byIp, ip, now);
+  // An empty address (a loopback caller, the dashboard) is not counted per address.
+  if (ip) bump(byIp, ip, now);
 }
 
 /**
@@ -75,7 +76,7 @@ export function beginLoginAttempt(email: string, ip: string, now = Date.now()): 
 /** A correct password clears that email's failures and returns the address's reserved attempt. */
 export function loginSucceeded(email: string, ip: string, now = Date.now()): void {
   byEmail.delete(emailKey(email));
-  const w = live(byIp, ip, now);
+  const w = ip ? live(byIp, ip, now) : undefined;
   if (w) w.failures = Math.max(0, w.failures - 1);
 }
 
