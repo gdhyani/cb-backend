@@ -57,3 +57,21 @@ export function upstreamCa(resourceCa?: unknown): string[] | undefined {
   if (!extraCaFile && own.length === 0) return undefined;
   return [...tls.rootCertificates, ...(extraCaFile ? [fs.readFileSync(extraCaFile, "utf8")] : []), ...own];
 }
+
+/**
+ * S1 / FR-GW-005: the URL the gateway calls for an app request — always on the configured upstream's origin, under
+ * its path prefix. Only an origin-form request target (`/path?query`) is accepted: an absolute (`http://other/…`),
+ * scheme-relative (`//other/…`) or backslash form could otherwise make `new URL()` pick another host, and the real
+ * credential would be sent there. Returns null when the target is refused.
+ */
+export function originFormTarget(upstream: URL, path: string): URL | null {
+  if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\")) return null;
+  const prefix = upstream.pathname.replace(/\/$/, "");
+  let target: URL;
+  try {
+    target = new URL(`${prefix}${path}`, upstream.origin);
+  } catch {
+    return null;
+  }
+  return target.origin === upstream.origin ? target : null;
+}

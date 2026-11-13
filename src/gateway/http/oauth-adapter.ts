@@ -16,7 +16,7 @@ import {
   sendJson,
 } from "./http-adapter.js";
 import { createRedactor, decoded, injectedBasic, redactHeaders } from "./redaction.js";
-import { upstreamDispatcher } from "./upstream.js";
+import { originFormTarget, upstreamDispatcher } from "./upstream.js";
 
 export interface OAuthResourceConfig {
   /** Full token endpoint, e.g. https://oauth2.googleapis.com/token */
@@ -93,7 +93,9 @@ export function createOAuthHandler(ctx: TunnelContext): Handler {
         headers["content-length"] = String((body as Buffer).length);
       }
 
-      const target = new URL(`${upstream.pathname.replace(/\/$/, "")}${path}`, upstream.origin);
+      // S1: the app's path never picks the host the request (and any swapped secret) goes to.
+      const target = originFormTarget(upstream, path);
+      if (!target) return sendJson(res, 400, { error: "cb_bad_request_target" });
       try {
         const up = await request(target, {
           method: method as "GET",

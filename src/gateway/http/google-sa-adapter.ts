@@ -19,7 +19,7 @@ import {
 } from "./http-adapter.js";
 import { readBody } from "./oauth-adapter.js";
 import { createRedactor, decoded, redactHeaders } from "./redaction.js";
-import { upstreamDispatcher } from "./upstream.js";
+import { originFormTarget, upstreamDispatcher } from "./upstream.js";
 
 export interface GoogleSaConfig {
   projectId: string;
@@ -158,6 +158,13 @@ export function createGoogleSaHandler(ctx: TunnelContext): Handler {
     const realToken = decryptSecret(masterKey(), swap.real);
     const method = req.method ?? "GET";
     const upstream = upstreamFor(host);
+    // S1: the app's path never picks the host the real Google token is sent to.
+    const target = originFormTarget(upstream, req.url ?? "");
+    if (!target) {
+      req.resume();
+      sendJson(res, 400, { error: "cb_bad_request_target" });
+      return;
+    }
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(req.headers)) {
       if (k.startsWith(":") || HOP_BY_HOP.has(k) || v === undefined) continue;
@@ -165,7 +172,7 @@ export function createGoogleSaHandler(ctx: TunnelContext): Handler {
     }
     headers.host = upstream.host;
     headers.authorization = `Bearer ${realToken}`;
-    const up = await request(new URL(req.url ?? "/", upstream.origin), {
+    const up = await request(target, {
       method: method as "GET",
       headers,
       body: method === "GET" || method === "HEAD" ? undefined : (req as unknown as Readable),

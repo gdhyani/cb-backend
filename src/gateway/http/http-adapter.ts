@@ -16,7 +16,7 @@ import { upstreamAllowed } from "../../utils/upstream-url.js";
 import { asSocketLike } from "../socket-like.js";
 import type { StreamAdapter, TunnelContext } from "../types.js";
 import { createRedactor, decoded, injectedBasic, redactHeaders } from "./redaction.js";
-import { upstreamDispatcher } from "./upstream.js";
+import { originFormTarget, upstreamDispatcher } from "./upstream.js";
 
 export type AuthScheme = "bearer" | "x-api-key" | "basic-password" | "header";
 export type GatewayRequest = http.IncomingMessage | http2.Http2ServerRequest;
@@ -150,7 +150,6 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
     config.fakePrefix ?? "cb_",
   );
   const upstream = new URL(config.upstreamUrl);
-  const prefix = upstream.pathname.replace(/\/$/, "");
 
   const fakePrefix = config.fakePrefix ?? "cb_";
   return (req, res) => {
@@ -169,8 +168,13 @@ export function createHttpHandler(ctx: TunnelContext): Handler {
       sendJson(res, 403, { error: "cb_upstream_not_allowed" });
       return;
     }
-    const path = req.url ?? "/";
-    const target = new URL(`${prefix}${path}`, upstream.origin);
+    const path = req.url ?? "";
+    const target = originFormTarget(upstream, path);
+    if (!target) {
+      req.resume();
+      sendJson(res, 400, { error: "cb_bad_request_target" });
+      return;
+    }
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(req.headers)) {
       if (!k.startsWith(":") && !HOP_BY_HOP.has(k) && v !== undefined)
