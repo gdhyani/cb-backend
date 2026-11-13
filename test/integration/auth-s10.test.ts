@@ -1,11 +1,16 @@
 import type { Express } from "express";
 import mongoose, { Types } from "mongoose";
+import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../../src/app.js";
 import { connectMongo, disconnectMongo } from "../../src/clients/mongodb.client.js";
 import { LOGIN_MAX_FAILURES_PER_EMAIL, LOGIN_MAX_FAILURES_PER_IP } from "../../src/constants.js";
 import { UserModel } from "../../src/models/user.model.js";
-import { clearLoginFailures } from "../../src/services/login-limit.service.js";
+import {
+  clearLoginFailures,
+  loginLimiterSize,
+  recordLoginFailure,
+} from "../../src/services/login-limit.service.js";
 import { loadOrgCa } from "../../src/services/org-ca.service.js";
 import { browser, cli, loginDevice, signupOwner } from "../helpers/api.js";
 import { useTestEnv } from "../helpers/env.js";
@@ -70,6 +75,44 @@ describe("S10 / FR-CRY-006 login protection", () => {
     expect((await login(email, password)).status).toBe(200);
     for (let i = 0; i < LOGIN_MAX_FAILURES_PER_EMAIL - 1; i++)
       expect((await login(email, "wrong-password")).status).toBe(401);
+  });
+
+  it("S10 a burst of parallel wrong-password logins for one email cannot exceed the limit", async () => {
+    const { email } = await owner();
+    const results = await Promise.all(
+      Array.from({ length: 25 }, () =>
+        request(app)
+          .post("/api/auth/login")
+          .set("x-cb-csrf", "1")
+          .send({ email, password: "wrong-password" }),
+      ),
+    );
+    const guesses = results.filter((r) => r.status === 401).length;
+    expect(guesses).toBeLessThanOrEqual(LOGIN_MAX_FAILURES_PER_EMAIL);
+    expect(results.filter((r) => r.status === 429).length).toBe(25 - guesses);
+  });
+
+  it("S10 behind the dashboard (a loopback proxy) the per-IP limit uses the forwarded browser address", async () => {
+    const from = (ip: string, email: string, password: string) =>
+      request(app)
+        .post("/api/auth/login")
+        .set("x-cb-csrf", "1")
+        .set("x-forwarded-for", ip)
+        .send({ email, password });
+    for (let i = 0; i < LOGIN_MAX_FAILURES_PER_IP; i++)
+      expect((await from("203.0.113.7", `nobody-${i}@example.test`, "wrong-password")).status).toBe(401);
+    expect((await from("203.0.113.7", "nobody-x@example.test", "wrong-password")).status).toBe(429);
+    // Someone else, logging in through the same dashboard, is not locked out by that address.
+    const { email, password } = await owner();
+    expect((await from("198.51.100.9", email, password)).status).toBe(200);
+  });
+
+  it("S10 the limiter's memory stays bounded however many emails and addresses are tried", () => {
+    for (let i = 0; i < 25_000; i++)
+      recordLoginFailure(`spray-${i}@example.test`, `2001:db8::${i.toString(16)}`);
+    const size = loginLimiterSize();
+    expect(size.emails).toBeLessThanOrEqual(10_000);
+    expect(size.ips).toBeLessThanOrEqual(10_000);
   });
 
   it("S10 an unknown email and a wrong password look the same, so the limit does not reveal accounts", async () => {
