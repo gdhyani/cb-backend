@@ -10,3 +10,8 @@ export const WEBHOOK_BODY_LIMIT = "1mb";
 export const GRANT_SWEEP_INTERVAL_MS = 2_000;
 /** Webhook re-routing, re-pushes and 24 h expiry (FR-WH-003). */
 export const WEBHOOK_SWEEP_INTERVAL_MS = 2_000;
+
+/** S10 / FR-CRY-006: failed logins allowed per email and per caller IP within the window, then 429 until it passes. */
+export const LOGIN_MAX_FAILURES_PER_EMAIL = 10;
+export const LOGIN_MAX_FAILURES_PER_IP = 30;
+export const LOGIN_FAILURE_WINDOW_MS = 15 * 60_000;

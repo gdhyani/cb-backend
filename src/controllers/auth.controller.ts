@@ -1,11 +1,15 @@
 import type { CookieOptions, NextFunction, Request, Response } from "express";
 import { getEnv } from "../config/env.js";
+import { AppError } from "../errors/app-error.js";
 import { toAppError } from "../errors/to-app-error.js";
 import { authOf, SESSION_COOKIE } from "../middlewares/auth.middleware.js";
 import * as accountService from "../services/account.service.js";
 import * as authService from "../services/auth.service.js";
 import * as inviteService from "../services/invite.service.js";
+import { beginLoginAttempt, loginSucceeded } from "../services/login-limit.service.js";
 import { sendSuccess } from "../utils/response.js";
+
+const isLoopback = (ip: string | undefined) => !ip || ip === "::1" || /^(::ffff:)?127\./.test(ip);
 
 function cookieOptions(expires: Date): CookieOptions {
   return { httpOnly: true, sameSite: "lax", secure: getEnv().COOKIE_SECURE, expires, path: "/" };
@@ -28,7 +32,21 @@ export async function signupHandler(req: Request, res: Response, next: NextFunct
 
 export async function loginHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const user = await authService.login(authService.LoginBody.parse(req.body));
+    const body = authService.LoginBody.parse(req.body);
+    // A loopback caller is the dashboard's proxy (or this machine): its browsers can't be told apart, so only the
+    // per-email limit applies — otherwise a few wrong passwords would lock every dashboard user out.
+    const ip = isLoopback(req.ip) ? "" : (req.ip ?? "");
+    // S10 / FR-CRY-006: refuse while this email or address is over its failed-login limit; otherwise the attempt is
+    // counted before the password is checked and given back on success.
+    const wait = beginLoginAttempt(body.email, ip);
+    if (wait > 0) {
+      res.setHeader("Retry-After", String(wait));
+      throw new AppError("RATE_LIMITED", {
+        message: `Too many failed logins. Try again in ${Math.ceil(wait / 60)} minute(s).`,
+      });
+    }
+    const user = await authService.login(body);
+    loginSucceeded(body.email, ip);
     await startSession(req, res, user.id);
     sendSuccess(res, await authService.getMe(user.id));
   } catch (err) {

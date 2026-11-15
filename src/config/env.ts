@@ -22,6 +22,18 @@ const EnvSchema = z.object({
     .default("false")
     .transform((v) => v === "true"),
   UPSTREAM_EXTRA_CA_FILE: z.string().optional(),
+  /**
+   * S10: which proxies' X-Forwarded-For Express believes for the caller's address (login limits, webhook flood
+   * guard). Default `false`: the header is ignored (the dashboard's Next proxy does not set it, and passes a
+   * client's own value through). Behind a reverse proxy that sets it, list that proxy — together with `loopback` when
+   * the dashboard sits in between — in Express "trust proxy" syntax, e.g. `loopback, 10.0.0.0/8`.
+   */
+  TRUST_PROXY: z
+    .string()
+    .default("false")
+    .transform((v): boolean | number | string =>
+      v === "false" ? false : v === "true" ? true : /^\d+$/.test(v) ? Number(v) : v,
+    ),
   /** OQ11 / D11: plain http to private addresses (local dev). Turn off for hosted, multi-tenant deployments. */
   ALLOW_PRIVATE_HTTP_UPSTREAMS: z
     .enum(["true", "false"])
@@ -92,6 +104,11 @@ let current: Env | undefined;
 /** Called once by startup (and by tests). */
 export function setEnv(env: Env): void {
   current = env;
+}
+
+/** The loaded env, or undefined before startup (app wiring that must not throw, e.g. createApp in tests). */
+export function peekEnv(): Env | undefined {
+  return current;
 }
 
 export function getEnv(): Env {
